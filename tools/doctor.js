@@ -8,7 +8,7 @@
  * startup:
  *
  *   1. Node version and the APIs AirChat relies on
- *   2. that every JavaScript file parses
+ *   2. that every JavaScript file parses (as a script, or as an ES module)
  *   3. that each server module loads and exports what the others expect
  *   4. that the UI files exist, and that app.js only asks for elements that
  *      index.html actually defines
@@ -65,7 +65,8 @@ function heading(text) {
   console.log(`\n${text}`);
 }
 
-const SKIP_DIRS = new Set(['node_modules', 'data', 'dist', '.git']);
+/** Generated output, never source: nothing here is worth parsing or reporting. */
+const SKIP_DIRS = new Set(['node_modules', 'data', 'dist', 'dist-site', 'build', 'artifacts', '.git']);
 
 function collectJavaScript(dir, into) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -74,6 +75,41 @@ function collectJavaScript(dir, into) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) collectJavaScript(full, into);
     else if (entry.name.endsWith('.js')) into.push(full);
+  }
+}
+
+/**
+ * Is this file written as an ES module rather than a plain script?
+ *
+ * AirChat's own source is CommonJS, but the landing page's Worker is an ES
+ * module (that is what the hosting runs), and `new vm.Script` refuses one. So a
+ * file that starts with import/export is checked a second way instead of being
+ * reported as broken. The pattern is deliberately anchored: a line that merely
+ * mentions "export" inside a string or a comment must not change how the file is
+ * read.
+ */
+function looksLikeModule(source) {
+  return /^\s*(?:import|export)\b/m.test(source);
+}
+
+/**
+ * Parse an ES module without running anything of ours from disk.
+ *
+ * A data: URL is the whole trick: it parses the source as a module and has no
+ * filesystem to resolve against, so this can never accidentally execute the
+ * file being checked, and a relative import in it cannot pull in a real module.
+ */
+async function parsesAsModule(source) {
+  const encoded = Buffer.from(source, 'utf8').toString('base64');
+
+  try {
+    await import(`data:text/javascript;base64,${encoded}`);
+    return { ok: true, note: 'ES module' };
+  } catch (err) {
+    // A module that imports something relative has nothing to resolve against
+    // here, so only a syntax error counts against it.
+    if (err instanceof SyntaxError) return { ok: false, detail: err.message };
+    return { ok: true, note: 'ES module (imports not resolved here)' };
   }
 }
 
@@ -243,13 +279,23 @@ async function main() {
 
   for (const file of files) {
     const relative = path.relative(ROOT, file);
+    const source = fs.readFileSync(file, 'utf8');
+
     try {
       // Parse only. This never runs the file.
-      new vm.Script(fs.readFileSync(file, 'utf8'), { filename: file });
+      new vm.Script(source, { filename: file });
       pass(relative);
+      continue;
     } catch (err) {
-      fail(relative, err.message);
+      if (!looksLikeModule(source)) {
+        fail(relative, err.message);
+        continue;
+      }
     }
+
+    const module = await parsesAsModule(source);
+    if (module.ok) pass(`${relative}  (${module.note})`);
+    else fail(relative, module.detail);
   }
 
   /* ---- 3. server modules -------------------------------------------- */

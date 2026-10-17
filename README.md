@@ -439,6 +439,52 @@ perspective, so they can reply in AirChat and it lands next to everything else.
 
 ---
 
+## Downloads and packaging
+
+Everything in `artifacts/` is built from this source tree by the scripts in
+`packaging/`, on a normal Windows PC with nothing installed but Node. No CI, no
+Docker, no build server.
+
+| Artifact | What it is | Built by |
+| --- | --- | --- |
+| `AirChat-Setup-0.1.0.exe` | 324 KB self-extracting installer. Unpacks to `%LOCALAPPDATA%\AirChat`, checks for Node, adds a Desktop shortcut, starts it. No admin rights. | `npm run build:sfx` |
+| `AirChat-Setup-0.1.0-electron.exe` | 106 MB Electron app: a real window, its own icon, no browser chrome. Attached to the GitHub release rather than committed, because it is over GitHub's 100 MB file limit. | `npm run build:win` |
+| `AirChat-0.1.0-mac.zip` | `AirChat.app`, zipped with its executable bit intact. Data lives in `~/Library/Application Support/AirChat`, never inside the bundle. | `npm run build:mac` |
+| `AirChat-0.1.0-unsigned.ipa` | An **unsigned, uncompiled** iOS payload: real `Info.plist`, real icons, the real interface, and a placeholder where the binary belongs. It will not install until it is compiled and signed on a Mac. | `npm run build:ipa` |
+
+Three things are worth being straight about, because they are limits of the
+platforms rather than of this project:
+
+- **There is no `.dmg` in the repository.** A DMG is Apple's disk-image format
+  and only Apple's `hdiutil` writes one, which means only a Mac can produce it.
+  What ships instead is the working `.app` plus `packaging/mac/make-dmg.command`,
+  which builds the real disk image in one step on any Mac.
+- **The `.ipa` cannot be made installable here.** iOS runs nothing unsigned, and
+  nothing at all without a Mach-O binary from Apple's compiler. The file in
+  `artifacts/` is the packaging shape, so the signing step has everything except
+  the two things only macOS can give it; `START-HERE.md` inside it has the
+  commands.
+- **None of the installers are code-signed.** Windows SmartScreen and macOS
+  Gatekeeper will both want a right-click → Open the first time. Signing needs a
+  paid certificate from each vendor.
+
+The landing page is plain HTML and CSS in `site/`. `node
+packaging/site/build-site.js` stages it (and checks that every link in it
+resolves to a file that exists), and the staged folder is what gets uploaded.
+
+To build every artifact at once:
+
+```bat
+npm install
+npm run build:all
+```
+
+`npm install` pulls Electron once, for the optional desktop window. AirChat
+itself still has **zero runtime dependencies** — nothing in `server/` or `ui/`
+imports anything.
+
+---
+
 ## How it works
 
 ```
@@ -461,8 +507,19 @@ ui/
   sw.js                            offline shell + notification handling
 tools/
   tunnel.js     free public link, then starts the server
+  zip.js        a zip writer, so the macOS and iOS artifacts keep their modes
+  make-icon.js  turns the drawn icon into the .ico and .png the installers read
 desktop/
   main.js       optional Electron window
+packaging/
+  mac/          builds AirChat.app, and builds a real .dmg on a Mac
+  ios/          builds the unsigned iOS payload to sign
+  windows/      builds the .exe installer with IExpress, which Windows has
+  site/         stages the landing page for upload
+site/
+  index.html, styles.css, icon.png  the landing page, no build step
+artifacts/
+  the built downloads, straight from the scripts above
 ```
 
 The app icons are worth a note: a phone home screen needs a PNG, but instead of

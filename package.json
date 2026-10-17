@@ -3,16 +3,61 @@
   "version": "0.1.0",
   "private": true,
   "description": "AirChat - cross-platform messaging that mirrors your chats to iMessage, SMS and Telegram.",
+  "author": "bob1234afk",
   "main": "desktop/main.js",
   "scripts": {
     "start": "node server/index.js",
     "app": "electron .",
-    "doctor": "node tools/doctor.js"
+    "doctor": "node tools/doctor.js",
+    "icon": "node tools/make-icon.js",
+    "build:mac": "node packaging/mac/build-mac.js",
+    "build:ipa": "node packaging/ios/build-ipa.js",
+    "build:sfx": "node packaging/windows/build-sfx.js",
+    "build:win": "npm run icon && electron-builder --win nsis",
+    "build:all": "npm run build:win && npm run build:sfx && npm run build:mac && npm run build:ipa"
   },
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
-    "electron": "latest"
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.bob1234afk.airchat",
+    "productName": "AirChat",
+    "asar": false,
+    "files": [
+      "server/**/*",
+      "ui/**/*",
+      "tools/**/*",
+      "desktop/**/*",
+      "package.json",
+      "config.example.json",
+      "README.md"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "shortcutName": "AirChat",
+      "artifactName": "AirChat-Setup-${version}-electron.exe",
+      "uninstallDisplayName": "AirChat ${version}"
+    }
   }
 }
