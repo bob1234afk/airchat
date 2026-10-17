@@ -358,8 +358,10 @@ async function checkPublicLink() {
     }
     pass('stopping the tunnel withdraws the address, so no dead link can be handed out');
 
-    // No cloudflared at all is a normal state, not a crash.
-    const missing = await new Tunnel({ binary: 'airchat-no-such-binary', configPath }).start();
+    // No cloudflared at all is a normal state, not a crash. Provisioning is
+    // switched off here so this stays a test of the message rather than of this
+    // machine's internet connection.
+    const missing = await new Tunnel({ binary: 'airchat-no-such-binary', configPath, provision: false }).start();
     if (missing.ok || !/not installed/i.test(missing.detail || '')) {
       fail('a missing cloudflared is not reported as "not installed"', JSON.stringify(missing));
       return;

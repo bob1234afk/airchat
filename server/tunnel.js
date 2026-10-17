@@ -439,9 +439,16 @@ class Tunnel extends EventEmitter {
 
       this.child.on('error', (err) => {
         const missing = err.code === 'ENOENT';
+
+        // Three different truths, said difference: nothing was ever installed,
+        // nothing is installed and the download failed (with the reason), and
+        // nothing is installed and nothing was even tried.
         const detail = missing
-          ? 'no public-link tool is installed' +
-            (this.provisionError ? ` (${this.provisionError})` : ', and AirChat could not fetch one')
+          ? this.provision === false
+            ? 'cloudflared is not installed'
+            : this.provisionError
+              ? `cloudflared is not installed (${this.provisionError})`
+              : 'cloudflared is not installed, and AirChat could not download it'
           : err.message;
 
         // Missing is the one failure retrying cannot fix within this run, so it is
