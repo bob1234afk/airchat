@@ -342,8 +342,60 @@ function createWindow() {
     log(`the interface process ended: ${details.reason} (exit ${details.exitCode})`);
   });
 
+  // Where the window was, and where it tried to go, when it closes by itself.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    log(`the window is navigating to ${url}`);
+  });
+
+  mainWindow.webContents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
+    if (isMainFrame) log(`the window started loading ${url}`);
+  });
+
+  mainWindow.webContents.on('destroyed', () => {
+    log('the window\'s page was destroyed');
+  });
+
   mainWindow.webContents.on('did-fail-load', (event, code, description, url) => {
     log(`the interface failed to load: ${description} (${code}) ${url}`);
+  });
+
+  // What the interface says when something goes wrong. Warnings and errors only:
+  // everything else is the app working normally, and this log is read by people.
+  mainWindow.webContents.on('console-message', (...args) => {
+    const details = args.find((value) => value && typeof value === 'object' && 'message' in value);
+
+    if (details) {
+      if (details.level === 'error' || details.level === 'warning') {
+        log(`the window said (${details.level}): ${details.message}`);
+      }
+      return;
+    }
+
+    const [, level, message] = args;
+    if (Number(level) >= 2) log(`the window said: ${message}`);
+  });
+
+  // A window that closes itself can only be explained by the code that closed it,
+  // and the page's own window.close is not reachable from a sandboxed preload -
+  // so it is wrapped here, in the page, as soon as there is a page to wrap.
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents
+      .executeJavaScript(
+        `(() => {
+          if (window.__airchatCloseHooked) return true;
+          window.__airchatCloseHooked = true;
+          const original = window.close.bind(window);
+          window.close = function () {
+            try { console.log('AirChat: the page asked to close the window: ' + new Error().stack); } catch (err) {}
+            return original();
+          };
+          return true;
+        })()`,
+        true
+      )
+      .catch(() => {
+        // A page that will not run this is not a failure; it just cannot explain itself.
+      });
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

@@ -185,6 +185,24 @@ function connect(wsUrl) {
 
     socket.addEventListener('open', () => {
       resolve({
+        /**
+         * A plain DevTools command.
+         *
+         * Some things must not go through an evaluation: asking a page to reload
+         * itself through Runtime.evaluate with awaitPromise and returnByValue
+         * tears the target down instead (the reply is waited for across a
+         * navigation that destroys the context), which looks exactly like the app
+         * closing itself the moment the check reloads it.
+         */
+        send(method, params = {}) {
+          const id = nextId;
+          nextId += 1;
+
+          const answer = new Promise((res, rej) => pending.set(id, { res, rej, method }));
+          socket.send(JSON.stringify({ id, method, params }));
+          return answer;
+        },
+
         async evaluate(expression) {
           // Asking a socket that is already gone would leave this promise hanging
           // for ever, and a check with nothing left to wait for exits silently in
@@ -194,7 +212,7 @@ function connect(wsUrl) {
           const id = nextId;
           nextId += 1;
 
-          const answer = new Promise((res, rej) => pending.set(id, { res, rej }));
+          const answer = new Promise((res, rej) => pending.set(id, { res, rej, method: 'Runtime.evaluate' }));
 
           socket.send(
             JSON.stringify({
@@ -230,6 +248,13 @@ function connect(wsUrl) {
 
       if (payload.error) {
         waiting.rej(new Error(payload.error.message));
+        return;
+      }
+
+      // A plain command (Page.reload, Page.enable) answers with its own result
+      // object, which has no evaluation inside it.
+      if (waiting.method !== 'Runtime.evaluate') {
+        waiting.res(payload.result || null);
         return;
       }
 
@@ -375,6 +400,7 @@ async function main() {
   }
 
   let client = attached.client;
+  await client.send('Page.enable').catch(() => null);
 
   try {
     /* ---- 1. the app knows it is the app ------------------------------ */
@@ -515,7 +541,7 @@ async function main() {
       await sleep(250);
     }
 
-    await client.evaluate('location.reload()');
+    await client.send('Page.reload', {});
     await sleep(2500);
 
     const afterReload = await attachToApp(8000);
