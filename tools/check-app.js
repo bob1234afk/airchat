@@ -20,6 +20,7 @@
  *      that loses every conversation it ever had)?
  *   6. are notifications actually permitted? Electron denies by default.
  *   7. is there a public link, and does it answer from the internet?
+ *   8. does opening it a second time open a window, instead of closing?
  *
  * Usage:  node tools/check-app.js                 (launches the app itself)
  *         node tools/check-app.js --attach 9222   (a copy already running)
@@ -141,14 +142,14 @@ const APP_URL = /^https?:\/\/(localhost|127\.0\.0\.1):\d+\//;
  * candidate is asked where it is before it is trusted, and the wait continues
  * until one answers with an AirChat address.
  */
-async function attachToApp(timeoutMs) {
+async function attachToApp(timeoutMs, debugPort = DEBUG_PORT) {
   const deadline = Date.now() + timeoutMs;
   let saw = [];
 
   while (Date.now() < deadline) {
     let targets = [];
     try {
-      targets = await httpJson(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
+      targets = await httpJson(`http://127.0.0.1:${debugPort}/json/list`);
     } catch (err) {
       await sleep(400);
       continue;
@@ -710,6 +711,75 @@ async function main() {
       // busy"), so that reason is repeated rather than guessed at.
       const said = (appLog.match(/\[airchat\] no public link: (.+)/) || [])[1];
       warn(said ? `no public link: ${said.trim()}` : 'no public link - AirChat stays on this Wi-Fi');
+    }
+    /* ---- 8. opening it again ------------------------------------------ */
+
+    heading('Opening it again');
+
+    // The first thing anyone does when an app seems not to have opened is click
+    // it again. That used to quit the second copy on the spot - and if the copy
+    // holding the single-instance lock had no window to show, the double-click
+    // did nothing at all. From the outside both are "AirChat closes itself".
+    // Now the second copy opens a window onto the server that is already there.
+    if (ATTACH) {
+      warn('not tried: this check is attached to a copy that was already open');
+    } else {
+      const secondPort = DEBUG_PORT + 1;
+      const modulePath = require('electron');
+      const secondExe = typeof modulePath === 'string' ? modulePath : modulePath.default;
+
+      const second = spawn(secondExe, [ROOT, `--remote-debugging-port=${secondPort}`], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+        cwd: ROOT,
+      });
+
+      try {
+        const secondWindow = await attachToApp(20000, secondPort);
+
+        if (!secondWindow) {
+          fail('opening AirChat a second time showed no window', 'the second copy exited without one');
+        } else {
+          try {
+            const where = await secondWindow.client.evaluate('location.href');
+            const isApp = await secondWindow.client.evaluate(
+              '!!(window.airchatApp && window.airchatApp.isApp)'
+            );
+
+            pass('a second launch opens a window instead of closing');
+
+            if (isApp) pass('that window is a real AirChat window, not a blank page');
+            else fail('the second window loaded something that is not AirChat', where);
+
+            // The port proves it is the running server it attached to, rather
+            // than a second server of its own with a second copy of the chats.
+            const where_port = (() => {
+              try {
+                return new URL(where).port || '80';
+              } catch (err) {
+                return '';
+              }
+            })();
+
+            if (where_port === String(appPort())) {
+              pass(`it opens the copy that is already running (port ${where_port})`);
+            } else {
+              warn(`it opened port ${where_port}, while the running copy is on ${appPort()}`);
+            }
+          } finally {
+            secondWindow.client.close();
+          }
+
+          const stillThere = await client.evaluate('1 + 1').catch(() => null);
+          if (stillThere === 2) pass('the copy that was already open is still running');
+          else fail('the first copy went away when the second one opened');
+        }
+      } finally {
+        try {
+          second.kill();
+        } catch (err) {
+          // Already gone.
+        }
+      }
     }
   } finally {
     client.close();

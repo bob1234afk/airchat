@@ -1,33 +1,31 @@
 #!/bin/bash
-# AirChat on macOS, with a free public link for your friends.
+# AirChat on macOS.
 #
-# Same as the Windows "Start AirChat + Public Link.bat": opens a free Cloudflare
-# Quick Tunnel (no account), saves the address, then starts AirChat and prints
-# the link to send each friend.
+# Kept because a shortcut may already point at it. The public link is now
+# automatic - every launch of AirChat opens one - so this is the same door as
+# "Start AirChat (Mac).command".
 #
-# First time only, macOS may refuse to open this because it is not marked
-# executable. If so, in Terminal run once:
+# The first time, macOS may refuse to open this because the file is not marked
+# executable. If so, run once in Terminal:
 #
-#   chmod +x "Start AirChat + Public Link (Mac).command"
-#
-# You also need cloudflared. Install it free with:  brew install cloudflared
+#   chmod +x "Start AirChat (Mac).command"
 
 cd "$(dirname "$0")" || exit 1
 
-if ! command -v node >/dev/null 2>&1; then
-  echo
-  echo "  AirChat needs Node.js 18 or newer."
-  echo "  Install it from https://nodejs.org (or run:  brew install node)"
-  echo "  then start AirChat again."
-  echo
-  echo "  Press Return to close."
-  read -r _
-  exit 1
+if [ -x "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" ]; then
+  exec "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" "$PWD"
 fi
 
-node tools/tunnel.js
-status=$?
+if [ -d "/Applications/AirChat.app" ]; then
+  exec open -a "/Applications/AirChat.app"
+fi
 
 echo
-echo "  AirChat stopped (exit $status). Press Return to close."
+echo "  AirChat is not installed on this Mac yet."
+echo
+echo "  Either install AirChat.app, or - if you are working on the code - run"
+echo "  npm install  in this folder once, then double-click this file again."
+echo
+echo "  Press Return to close."
 read -r _
+exit 1

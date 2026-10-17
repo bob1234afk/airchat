@@ -1,31 +1,31 @@
 #!/bin/bash
 # AirChat on macOS.
 #
-# Double-click this file in Finder to start AirChat, exactly like the Windows
-# "Start AirChat.bat". The first time, macOS may refuse to open it because the
-# file is not marked executable. If that happens, open Terminal, drag this file
-# in, and run once:
+# The app is the whole product: it starts its own server and its own public link
+# when it opens, so this file only opens it - exactly like the Windows
+# "Start AirChat.bat". There is no separate server or tunnel to start.
+#
+# The first time, macOS may refuse to open this because the file is not marked
+# executable. If so, run once in Terminal:
 #
 #   chmod +x "Start AirChat (Mac).command"
-#
-# After that it opens with a double-click like any app.
 
 cd "$(dirname "$0")" || exit 1
 
-if ! command -v node >/dev/null 2>&1; then
-  echo
-  echo "  AirChat needs Node.js 18 or newer."
-  echo "  Install it from https://nodejs.org (or run:  brew install node)"
-  echo "  then start AirChat again."
-  echo
-  echo "  Press Return to close."
-  read -r _
-  exit 1
+if [ -x "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" ]; then
+  exec "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" "$PWD"
 fi
 
-node server/index.js
-status=$?
+if [ -d "/Applications/AirChat.app" ]; then
+  exec open -a "/Applications/AirChat.app"
+fi
 
 echo
-echo "  AirChat stopped (exit $status). Press Return to close."
+echo "  AirChat is not installed on this Mac yet."
+echo
+echo "  Either install AirChat.app, or - if you are working on the code - run"
+echo "  npm install  in this folder once, then double-click this file again."
+echo
+echo "  Press Return to close."
 read -r _
+exit 1

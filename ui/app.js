@@ -1967,6 +1967,10 @@
         page: '',
       };
 
+      // What AirChat knows about its own reachability, sent with the answer so
+      // this window never explains a state that has already changed.
+      const link = answer.link || {};
+
       loading.remove();
 
       if (key) {
@@ -2024,21 +2028,41 @@
         modal.appendChild(test);
       } else {
         // No code means nothing here can reach past this Wi-Fi. Say what is
-        // missing and offer the one thing that still works, rather than a code
-        // that would fail in their hands.
+        // actually happening - "still starting" and "cannot work at all" are
+        // very different things to someone looking at an empty code box - and
+        // never offer a code that would fail in their friend's hands.
+        const waiting = link.state === 'starting' || link.state === 'retrying';
+
         const why = el('div', 'encrypted-note encrypted-warn');
-        why.appendChild(el('strong', null, 'No code right now. '));
+        why.appendChild(el('strong', null, waiting ? 'One moment. ' : 'No code right now. '));
         why.appendChild(
           el(
             'span',
             null,
-            made.reason === 'no public link'
-              ? 'A code only works while AirChat has a public link, and this copy does not have one, ' +
-                  'so a friend on another network could not reach you.'
-              : `${made.detail} Check your internet connection, then open this window again.`
+            link.state === 'starting'
+              ? 'AirChat is setting up its public link, which takes a few seconds the first time. ' +
+                  'The code appears as soon as it is ready.'
+              : link.state === 'retrying'
+                ? 'AirChat had a public link and is reconnecting on its own. Check again in a few seconds.'
+                : made.reason === 'no public link'
+                  ? 'A code only works while AirChat has a public link, and this copy does not have one, ' +
+                    'so a friend on another network could not reach you.' +
+                    (link.detail ? ` ${link.detail}` : '')
+                  : `${made.detail} Check your internet connection, then try again.`
           )
         );
         modal.appendChild(why);
+
+        // The state changes on its own - the tunnel is retried in the background -
+        // so the way out of this note is another look, not a restart.
+        const again = el('button', 'btn btn-quiet', waiting ? 'Check again' : 'Try again');
+        again.type = 'button';
+        again.style.width = '100%';
+        again.addEventListener('click', () => {
+          closeModal();
+          openInvite(conversationId);
+        });
+        modal.appendChild(again);
 
         if (answer.guestUrl) {
           modal.appendChild(el('div', 'section-label', 'Or send them this link'));
@@ -2096,7 +2120,9 @@
       const list = el('div', 'meta-list');
       const reachable = made.ok
         ? 'Anywhere, over the internet - through their code'
-        : 'Only while on your Wi-Fi';
+        : link.state === 'starting' || link.state === 'retrying'
+          ? 'Not yet - AirChat is still trying'
+          : 'Only while on your Wi-Fi';
       list.appendChild(metaRow('Reachable', reachable));
       list.appendChild(metaRow('Same PC', withKey(answer.localGuestUrl)));
       if (made.ok) list.appendChild(metaRow('Code', made.code));
@@ -2407,9 +2433,13 @@
           'Public link',
           state.server.publicUrl
             ? state.server.publicUrl
-            : state.server.publicUrlExpired
-              ? 'Expired - start AirChat + Public Link for a new one'
-              : 'None - friends can only join on your Wi-Fi'
+            : state.link && state.link.state === 'starting'
+              ? 'Setting it up now…'
+              : state.link && state.link.state === 'retrying'
+                ? 'Reconnecting by itself…'
+                : state.server.publicUrlExpired
+                  ? 'Expired - reopen AirChat for a new one'
+                  : 'None - friends can only join on your Wi-Fi'
         )
       );
       serverList.appendChild(metaRow('Version', `AirChat ${state.server.version}`));

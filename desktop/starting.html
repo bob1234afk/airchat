@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AirChat</title>
+<style>
+  /* Deliberately the same colours as the app, so opening AirChat never flashes
+     a white page or a differently-styled window before the real interface. */
+  :root {
+    --bg: #08090d;
+    --panel: #11131a;
+    --line: #22252f;
+    --ink: #eceef4;
+    --muted: #8f93a3;
+    --accent: #7c5cff;
+    --warn: #ffb86b;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(60% 60% at 50% 35%, #141729 0%, var(--bg) 70%);
+    color: var(--ink);
+    font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  main {
+    width: min(440px, 84vw);
+    text-align: center;
+  }
+
+  .mark {
+    width: 68px;
+    height: 68px;
+    margin: 0 auto 26px;
+    border-radius: 20px;
+    background: linear-gradient(150deg, #8d70ff, #5a3ce0);
+    box-shadow: 0 18px 44px rgba(124, 92, 255, 0.32);
+    display: grid;
+    place-items: center;
+    position: relative;
+  }
+
+  /* The same bubble the app's icon draws, built from two rounded shapes. */
+  .mark span {
+    width: 30px;
+    height: 22px;
+    border-radius: 9px 9px 9px 3px;
+    background: #fff;
+    opacity: 0.95;
+  }
+
+  h1 {
+    margin: 0 0 8px;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+
+  p {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .detail {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    color: #c9ccd8;
+    font-size: 13px;
+    text-align: left;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 160px;
+    overflow: auto;
+  }
+
+  .hint {
+    margin-top: 18px;
+    font-size: 13px;
+    color: #6f7385;
+    opacity: 0;
+    transition: opacity 600ms ease;
+  }
+
+  .hint.show { opacity: 1; }
+
+  /* A quiet progress bar: motion proves the app is alive without claiming to
+     know how far along it is, which would be a guess. */
+  .bar {
+    margin: 22px auto 0;
+    width: 132px;
+    height: 3px;
+    border-radius: 3px;
+    background: #1b1e28;
+    overflow: hidden;
+  }
+
+  .bar::after {
+    content: "";
+    display: block;
+    width: 38%;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent);
+    animation: slide 1.25s ease-in-out infinite;
+  }
+
+  @keyframes slide {
+    0%   { transform: translateX(-110%); }
+    100% { transform: translateX(360%); }
+  }
+
+  button {
+    margin-top: 20px;
+    padding: 10px 20px;
+    border: 0;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  button:hover { background: #6c4df5; }
+
+  .failed .bar { display: none; }
+  .failed h1 { color: var(--warn); }
+</style>
+</head>
+<body>
+  <main id="screen">
+    <div class="mark"><span></span></div>
+    <h1 id="title">Starting AirChat</h1>
+    <p id="message">Opening your chats…</p>
+    <div class="bar"></div>
+    <div class="detail" id="detail" hidden></div>
+    <p class="hint" id="hint">Still working on it. This only takes long the first time.</p>
+    <button id="retry" type="button" hidden>Try again</button>
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const screen = document.getElementById('screen');
+      const title = document.getElementById('title');
+      const message = document.getElementById('message');
+      const detail = document.getElementById('detail');
+      const hint = document.getElementById('hint');
+      const retry = document.getElementById('retry');
+
+      let shownFor = 0;
+
+      function render(state) {
+        const value = state || {};
+
+        if (value.phase === 'failed') {
+          screen.classList.add('failed');
+          title.textContent = 'AirChat could not start';
+          message.textContent = value.message || 'Something went wrong.';
+          detail.textContent = value.detail || '';
+          detail.hidden = !value.detail;
+          hint.classList.remove('show');
+          retry.hidden = false;
+          return;
+        }
+
+        screen.classList.remove('failed');
+        title.textContent = 'Starting AirChat';
+        message.textContent = value.message || 'Opening your chats…';
+        detail.hidden = true;
+        retry.hidden = true;
+      }
+
+      // The window is already on screen, so a message that never arrives would
+      // leave a spinner running for ever. After a few seconds, say that it is
+      // taking longer instead of pretending nothing is happening.
+      const slow = setTimeout(function () {
+        hint.classList.add('show');
+      }, 6000);
+
+      retry.addEventListener('click', function () {
+        retry.disabled = true;
+        try {
+          window.airchatApp.retry();
+        } catch (err) {
+          retry.disabled = false;
+        }
+      });
+
+      const app = window.airchatApp;
+
+      if (!app) {
+        // Opened outside the app (a stray file:// window). Nothing to wait for.
+        render({ phase: 'failed', message: 'Open AirChat from its icon.', detail: '' });
+        clearTimeout(slow);
+        return;
+      }
+
+      app.onStartUp(render);
+
+      app
+        .startUp()
+        .then(function (state) {
+          if (state) render(state);
+        })
+        .catch(function () {
+          // The screen already says what is happening; a failed question is not
+          // worth replacing that with an error.
+        });
+    })();
+  </script>
+</body>
+</html>

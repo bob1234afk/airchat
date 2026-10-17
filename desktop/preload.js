@@ -76,5 +76,38 @@ contextBridge.exposeInMainWorld(
      * install prompt, no plain-http browser to hand over to an https link.
      */
     browserOnlyFeatures: false,
+
+    /**
+     * What start-up is doing, for the screen that is shown while it happens.
+     *
+     * The window opens before the server is ready, so something has to be true
+     * about those first seconds; an empty dark window or, worse, a window that
+     * never appears at all is what "the app keeps closing" looks like. These two
+     * calls are the whole conversation: read the current state, and be told when
+     * it changes.
+     */
+    startUp() {
+      return ipcRenderer.invoke('airchat:startup');
+    },
+
+    onStartUp(listener) {
+      if (typeof listener !== 'function') return () => {};
+
+      const handler = (event, state) => {
+        try {
+          listener(state);
+        } catch (err) {
+          // A broken listener is the page's problem; it must not break the app.
+        }
+      };
+
+      ipcRenderer.on('airchat:startup', handler);
+      return () => ipcRenderer.removeListener('airchat:startup', handler);
+    },
+
+    /** Ask the app to try again - used by the Retry button on that screen. */
+    retry() {
+      ipcRenderer.send('airchat:retry');
+    },
   })
 );

@@ -70,21 +70,21 @@ notifications, and the public link answering from the internet — run
 Everything in this section needs nothing from anyone — no card, no signup, no
 third party.
 
-**1. Start it with a public link.**
+**1. Start AirChat.**
 
-```bat
-Start AirChat + Public Link.bat
-```
+Double-click **`Start AirChat.bat`**, or the installed AirChat icon. Every
+launcher in this folder is now the same door.
 
-That opens a free Cloudflare Quick Tunnel (Cloudflare's own docs: *no Cloudflare
-account or domain required*), saves the public address into `config.json`, starts
-AirChat, and prints the exact link to send each friend. No tunnel installed? It
-tells you the one `winget` line, then carries on over your Wi-Fi only.
+Opening it always does the same three things, in this order: a window appears
+straight away, the chat server starts inside it, and a free Cloudflare Quick
+Tunnel opens by itself (Cloudflare's own docs: *no Cloudflare account or domain
+required*). The public address is saved into `config.json`, and the Invite window
+builds each friend's code on it.
 
-No cloudflared at all yet? Double-click **`Install Cloudflared (one time).bat`**
-once. Or download `cloudflared-windows-amd64.exe` from the
-[releases page](https://github.com/cloudflare/cloudflared/releases/latest), rename
-it to `cloudflared.exe`, and drop it in this folder — AirChat will use it.
+There is nothing to install first. If `cloudflared` is missing, AirChat downloads
+the official build once and keeps it. If the link cannot be opened just then —
+no internet, Cloudflare busy — the app says so in the Invite window, keeps
+trying by itself, and everything else works over your Wi-Fi meanwhile.
 
 **2. Have your friend install it.**
 
@@ -264,9 +264,9 @@ $39/month, which is aimed at businesses rather than two friends.
    interface and the code agree on element names, and confirms the port is free.
    `check:app` drives the real Electron window and proves what only an app can do:
    a secure context with WebCrypto, a message locked before it is sent and locked
-   on disk, keys surviving a reload, notifications, and the public link answering
-   from the internet. Close AirChat first — it refuses to test a copy that is
-   already running.
+   on disk, keys surviving a reload, notifications, the public link answering from
+   the internet, and a second launch opening a window instead of closing. Close
+   AirChat first — it refuses to test a copy that is already running.
 
    The server on its own still works, for a machine with no Electron:
    `npm start` opens the same interface at <http://localhost:4000>, and
@@ -274,30 +274,25 @@ $39/month, which is aimed at businesses rather than two friends.
 
 ### Keep it out of the way
 
-If you run the server on its own rather than the app, double-click
-**`Start AirChat in Tray.bat`**. It starts the server *and* the public link, hands
-them to Windows, and closes itself: AirChat then has no window at all — just an
-icon next to the clock. Closing that launcher window, or any window, stops
-nothing. Double-clicking it again replaces the running copy instead of fighting
-it for the port.
+**`Start AirChat in Tray.bat`** starts the same app with no window of its own and
+puts an icon next to the clock: same server, same public link, same chats. The
+icon is just the way back to a window. Double-click it to open AirChat;
+right-click it to open the log or stop AirChat. If you cannot see it, click the
+small `^` next to the clock.
 
-The app needs none of this: it is a window that opens its own link.
+**`Start AirChat.bat`** is the ordinary one: a window you can watch.
 
-It deliberately does **not** open a browser tab: the tray icon is the way in.
-Double-click the icon to open AirChat; right-click it to copy the friend links,
-open the log, or stop AirChat. With no console to read, everything AirChat has to
-report — starting, running, stopped, a link that would not open — arrives as a
-tray balloon or a small dialog, and the full output is in `airchat-tray.log`.
-
-If you would rather watch it happen, `Start AirChat + Public Link.bat` still runs
-in a normal window you can sit in front of.
+Both doors lead to one AirChat. Opening either while AirChat is already running
+puts a window in front of you — it never starts a second copy, a second server or
+a second link. Nothing has to be closed and nothing has to be stopped first.
 
 ### On a Mac
 
-AirChat runs on a Mac as well, with the same two launchers:
+The `.command` files do the same thing with the same app:
 
-- **`Start AirChat (Mac).command`** — starts AirChat at <http://localhost:4000>.
-- **`Start AirChat + Public Link (Mac).command`** — also opens the free public link.
+- **`Start AirChat (Mac).command`** — opens AirChat.
+- **`Start AirChat + Public Link (Mac).command`** — the same door; the public link
+  is automatic now.
 
 The first time, macOS may refuse to open a `.command` file that is not marked
 executable. Open Terminal in this folder and run this once:
@@ -372,8 +367,9 @@ AirChat says so plainly when there is not.
 Your laptop is not reachable from the internet by default. The app opens the
 tunnel itself on every launch; if you are running the server by hand instead:
 
-1. Once only: **`Install Cloudflared (one time).bat`**
-2. Every time: **`Start AirChat + Public Link.bat`** (or the tray launcher)
+Nothing, usually. Open AirChat and it opens the tunnel itself, fetching
+`cloudflared` the first time if it is missing. If you would rather install it by
+hand, **`Install Cloudflared (one time).bat`** still does exactly that.
 
 Either way a free Cloudflare Quick Tunnel is what makes a code reachable, and
 that address lives exactly as long as the process behind it. AirChat knows this:
@@ -628,9 +624,18 @@ keeps the window open so you can read the result.
 You opened the port without the token. Use the address printed in the terminal
 window, which includes `?token=…`.
 
-**"Port 4000 is already in use"**
-AirChat is probably already running. Close the other window, or change `port` in
-`config.json`.
+**It seemed to open and then close straight away**
+It cannot any more: opening AirChat always leaves a window on screen. A second
+copy adds a window onto the one that is running instead of quitting, and a start
+that fails shows a screen with a **Try again** button rather than disappearing. If
+you still see it, send `%APPDATA%\AirChat\airchat-app.log`
+(`~/Library/Application Support/AirChat/airchat-app.log` on a Mac) — it records
+every start, close and crash with the code that asked for it.
+
+**Something else is using AirChat's port**
+Nothing to do: AirChat uses its own port when it can have it, and moves to a free
+one when it cannot. The window, its invite links and the tray icon all follow it
+there, and no screen in the app mentions a port number.
 
 **Messages show a red "Failed" note**
 Hover the chat header — it tells you which channel is not set up. Or run

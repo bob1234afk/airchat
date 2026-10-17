@@ -31,6 +31,7 @@ const {
 } = require('./adapters');
 const { Router } = require('./router');
 const friendCodes = require('./codes');
+const linkStatus = require('./link-status');
 const ws = require('./ws');
 const icons = require('./icons');
 
@@ -439,6 +440,10 @@ function fullState() {
   return Object.assign({ view: 'owner' }, store.snapshot(), {
     bridges: router.bridgeStatus(),
     server: serverInfo(true),
+    // Whether a friend can reach this copy from another network, and why not
+    // when they cannot. The interface says this out loud instead of leaving
+    // "no code right now" as the only answer.
+    link: Object.assign(linkStatus.get(), { summary: linkStatus.summary() }),
   });
 }
 
@@ -854,7 +859,13 @@ async function handleApi(req, res, url, method, pathname) {
       const links = inviteLinks(conversationId);
       const code = await friendCodeFor(conversationId, body.key);
 
-      sendJson(res, 200, { ...links, code });
+      sendJson(res, 200, {
+        ...links,
+        code,
+        // Sent with the code so the Invite window never explains a stale state:
+        // it knows whether the link is ready, still coming, or impossible now.
+        link: Object.assign(linkStatus.get(), { summary: linkStatus.summary() }),
+      });
       return;
     }
 
@@ -1242,14 +1253,22 @@ if (config.publicUrl && config.publicUrlUnverified) {
 }
 
 server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(
-      `\nPort ${config.port} is already in use - AirChat may already be running.\n` +
-        'Close the other copy, or change "port" in config.json.\n'
-    );
-  } else {
-    console.error(`\nAirChat could not start: ${err.message}\n`);
+  const said =
+    err.code === 'EADDRINUSE'
+      ? `Port ${config.port} is already in use - AirChat may already be running. ` +
+        'Close the other copy, or change "port" in config.json.'
+      : `AirChat could not start: ${err.message}`;
+
+  console.error(`\n${said}\n`);
+
+  // Inside the desktop app this is the same process as the window, so exiting
+  // here would close AirChat with nothing to look at and no explanation. The app
+  // asks for another port instead; a terminal run still stops with a message.
+  if (process.env.AIRCHAT_EMBEDDED === '1') {
+    process.emit('airchat:server-failed', err);
+    return;
   }
+
   process.exit(1);
 });
 
@@ -1270,5 +1289,36 @@ function shutdown(signal) {
   setTimeout(() => process.exit(0), 2000).unref();
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+/**
+ * Closing signals belong to whoever started this process.
+ *
+ * Started from a terminal, Ctrl-C should stop AirChat. Inside the desktop app
+ * this is the same process as the window, so a signal arriving from anywhere -
+ * a closing console, a parent process tidying up - would take the window with it
+ * and look exactly like the app closing itself. The app's own quit path closes
+ * the tunnel and the sockets; nothing here needs to exit for it.
+ */
+if (process.env.AIRCHAT_EMBEDDED !== '1') {
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+/**
+ * Listen again, on a different port.
+ *
+ * A start can lose the port to something else between the app checking that it
+ * was free and this file claiming it. Inside the app that is not a dead end:
+ * the port belongs to the app, so it picks another one and asks again rather
+ * than showing a failure for something it is about to fix. Only the desktop app
+ * sends this, and only because it owns the port number.
+ */
+if (process.env.AIRCHAT_EMBEDDED === '1') {
+  process.on('airchat:listen-on', (port) => {
+    const next = Number(port);
+    if (!(next > 0)) return;
+
+    config.port = next;
+    console.log(`[airchat] listening again on port ${next}`);
+    startListening();
+  });
+}

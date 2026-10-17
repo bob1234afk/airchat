@@ -1,17 +1,14 @@
 # AirChat, living in the notification area.
 #
-# Starts everything AirChat needs - the free public link (the tunnel) and the
-# server - with no window of any kind, then shows a tray icon next to the clock.
-# Nothing here depends on a console staying open, so AirChat keeps running after
-# the launcher window that started it has gone. From the tray you can open
-# AirChat, copy the friend links, open the log, or stop everything.
+# This used to start its own server and its own tunnel - a second AirChat, with
+# its own folder of settings and its own idea of which port was its own. Two of
+# those could not exist at once, and the failures looked like "AirChat does not
+# work" instead of "two AirChats are fighting".
 #
-# It uses only what Windows already has (.NET WinForms through Windows
-# PowerShell), so AirChat keeps its promise of needing nothing installed.
-#
-# If the tray cannot start, this deliberately makes a noise: it stops AirChat
-# and shows a dialog saying why. A silent failure here would leave AirChat
-# running with no icon and no obvious way to stop it.
+# Now it starts the app with --background. That is the same server, the same
+# public link and the same chats as the window, only with no window: the icon by
+# the clock is how to get back to one. Nothing here needs Node.js, because the
+# app is the program.
 
 $ErrorActionPreference = 'Stop'
 
@@ -19,194 +16,200 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $root = Split-Path -Parent $PSScriptRoot
-$logPath = Join-Path $root 'airchat-tray.log'
-$errPath = Join-Path $root 'airchat-tray.err.log'
 
-# Hide and re-show this console window on demand.
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class AirChatConsole {
-  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+# Where the app keeps everything the person owns. Both spellings, because a
+# development run and an installed copy disagree about capitalisation.
+$appData = Join-Path $env:APPDATA 'AirChat'
+$appHome = Join-Path $appData 'home'
+$configPath = Join-Path $appHome 'config.json'
+$appLog = Join-Path $appData 'airchat-app.log'
+
+$portFile = Join-Path $appData 'airchat-port'
+
+# The port AirChat is really on.
+#
+# The saved config is where it would like to be, and that is where it is almost
+# every time. When something else holds that port, the app moves to a free one
+# rather than refusing to open - and then this script would look on the old port,
+# find nothing, and tell the person AirChat had failed. The app writes the port it
+# actually used, so the icon and the menu can look in the right place.
+function Get-AirChatPort {
+  if (Test-Path -LiteralPath $portFile) {
+    $said = 0
+    $text = [string](Get-Content -LiteralPath $portFile -Raw)
+    if ([int]::TryParse($text.Trim(), [ref]$said) -and $said -gt 0) { return $said }
+  }
+
+  if (Test-Path -LiteralPath $configPath) {
+    try {
+      $saved = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+      if ($saved.port) { return [int]$saved.port }
+    } catch {
+      # A broken config is the server's error to report; the default will do.
+    }
+  }
+
+  return 4000
 }
-'@
 
-$console = [AirChatConsole]::GetConsoleWindow()
-
-# AirChat starts with no window of its own, so there is normally nothing to
-# hide. This does nothing when Windows gave this process no console, which keeps
-# the caller below honest without a special case.
-function Hide-AirChatWindow {
-  if ($console -ne [IntPtr]::Zero) { [void][AirChatConsole]::ShowWindow($console, 0) }
+function Update-AirChatPort {
+  $script:port = Get-AirChatPort
+  $script:healthUrl = "http://localhost:$($script:port)/api/health"
 }
 
-# Nothing is printed anywhere when there is no window, so anything the user has
-# to know goes through a balloon tip or a dialog.
+Update-AirChatPort
+
 function Show-AirChatNotice([string]$text) {
   [void][System.Windows.Forms.MessageBox]::Show($text, 'AirChat')
 }
 
-try {
-  $node = (Get-Command node -ErrorAction Stop).Source
-} catch {
-  Show-AirChatNotice("Node.js was not found, so AirChat cannot run.`r`n`r`n" +
-    "Install Node.js from https://nodejs.org (the LTS button), restart the PC,`r`n" +
-    'then run this again.')
+function Test-AirChatRunning {
+  try {
+    $answer = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 2
+    return [bool]($answer.app -eq 'AirChat')
+  } catch {
+    return $false
+  }
+}
+
+# The program to start: this folder's copy if it is a checkout, otherwise the
+# installed app. Mirrors tools/start-app.cmd, so both doors lead to one AirChat.
+$devExe = Join-Path $root 'node_modules\electron\dist\electron.exe'
+$installedExe = Join-Path $env:LOCALAPPDATA 'Programs\AirChat\AirChat.exe'
+
+if (Test-Path -LiteralPath $devExe) {
+  $exe = $devExe
+  $exeArgs = @("`"$root`"", '--background')
+} elseif (Test-Path -LiteralPath $installedExe) {
+  $exe = $installedExe
+  $exeArgs = @('--background')
+} else {
+  Show-AirChatNotice(
+    "AirChat is not installed on this PC yet.`r`n`r`n" +
+    "Install it with AirChat-Setup-0.1.0-electron.exe, or run  npm install  in`r`n" +
+    "the AirChat folder if you are working on the code.`r`n`r`n" +
+    "Then run  Start AirChat in Tray.bat  again."
+  )
   exit 1
 }
 
-# --no-browser: the tray icon is the way in, so do not also open a browser tab.
-#
-# The path is quoted by hand on purpose: Start-Process -ArgumentList does not
-# reliably quote array elements on Windows PowerShell, and an AirChat folder
-# whose path contains a space would then be split into two arguments.
-$tunnelScript = Join-Path $root 'tools\tunnel.js'
-$tunnelArgs = '"{0}" --no-browser' -f $tunnelScript
+$alreadyRunning = Test-AirChatRunning
+$proc = $null
 
-try {
-  $proc = Start-Process -FilePath $node `
-    -ArgumentList $tunnelArgs `
-    -WorkingDirectory $root `
-    -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput $logPath `
-    -RedirectStandardError $errPath
-} catch {
-  Show-AirChatNotice("AirChat could not start.`r`n`r`n$($_.Exception.Message)`r`n`r`n" +
-    'Run "Start AirChat + Public Link.bat" to see the whole story in a window.')
-  exit 1
-}
+if (-not $alreadyRunning) {
+  try {
+    # -WindowStyle Hidden keeps the console away; a GUI app has no console of its
+    # own anyway. Start-Process means the app belongs to Windows, not to this
+    # script, so hiding the launcher cannot close it.
+    $proc = Start-Process -FilePath $exe -ArgumentList $exeArgs -WorkingDirectory $root -WindowStyle Hidden -PassThru
+  } catch {
+    Show-AirChatNotice(
+      "AirChat could not start.`r`n`r`n$($_.Exception.Message)`r`n`r`n" +
+      'Run "Start AirChat.bat" to see it start in a window instead.'
+    )
+    exit 1
+  }
 
-# Wait for the tunnel to print its address, so the tray tip can show it. If it
-# never appears (no cloudflared, no internet) we still carry on to the tray.
-$url = $null
-$deadline = (Get-Date).AddSeconds(75)
+  # Wait for it to answer, so the icon can show the real address and so "it
+  # started" is something this script knows rather than assumes.
+  $deadline = (Get-Date).AddSeconds(45)
+  while ((Get-Date) -lt $deadline) {
+    # Re-read every time: the app may have had to move off the configured port
+    # while this loop was waiting, and only it knows where it ended up.
+    Update-AirChatPort
+    if (Test-AirChatRunning) { break }
+    Start-Sleep -Milliseconds 500
+  }
 
-while ((Get-Date) -lt $deadline) {
-  Start-Sleep -Milliseconds 500
+  if (-not (Test-AirChatRunning)) {
+    $detail = ''
 
-  if (Test-Path -LiteralPath $logPath) {
-    $text = Get-Content -LiteralPath $logPath -Raw
-    $found = [regex]::Match($text, 'https://[a-z0-9-]+\.trycloudflare\.com')
-    if ($found.Success) {
-      $url = $found.Value
-      break
+    if (Test-Path -LiteralPath $appLog) {
+      $detail = (Get-Content -LiteralPath $appLog -Tail 12 | Out-String).Trim()
     }
-  }
 
-  if ($proc.HasExited) { break }
+    if (-not $detail) { $detail = 'It wrote nothing to its log before stopping.' }
+    if ($detail.Length -gt 900) { $detail = $detail.Substring($detail.Length - 900) }
+
+    Show-AirChatNotice(
+      "AirChat started but did not answer.`r`n`r`n$detail`r`n`r`n" +
+      'Run "Start AirChat.bat" to watch it start in a window.'
+    )
+
+    if ($proc -and -not $proc.HasExited) { taskkill /PID $proc.Id /T /F | Out-Null }
+    exit 1
+  }
 }
 
-# It stopped while we were waiting for the link. With no window anywhere, the
-# log is the only place the reason exists - so say it, instead of showing an
-# icon for a server that is not there.
-if ($proc.HasExited) {
-  $detail = ''
-
-  foreach ($file in @($errPath, $logPath)) {
-    if (-not (Test-Path -LiteralPath $file)) { continue }
-    $text = Get-Content -LiteralPath $file -Raw
-    if ($text) { $text = $text.Trim() }
-    if ($text -and $text.Length -gt $detail.Length) { $detail = $text }
+# The address friends use, for the tooltip. Cosmetic: read from the file the
+# tunnel writes, so it cannot be stale from a previous run.
+function Get-AirChatLink {
+  try {
+    if (-not (Test-Path -LiteralPath $configPath)) { return '' }
+    $cfg = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    return [string]$cfg.publicUrl
+  } catch {
+    return ''
   }
-
-  if (-not $detail) { $detail = 'It wrote nothing before it stopped.' }
-  if ($detail.Length -gt 800) { $detail = $detail.Substring($detail.Length - 800) }
-
-  Show-AirChatNotice("AirChat stopped right after starting (exit $($proc.ExitCode)).`r`n`r`n" +
-    "$detail`r`n`r`n" +
-    'Run "Start AirChat + Public Link.bat" to watch it start in a window.')
-  exit 1
 }
 
-# AirChat draws its own icons, so borrow the real one for the tray rather than
-# showing a generic Windows glyph. Falls back if the server is not answering.
 function Get-AirChatIcon {
   for ($attempt = 0; $attempt -lt 10; $attempt++) {
     try {
       $client = New-Object System.Net.WebClient
-      $bytes = $client.DownloadData('http://localhost:4000/icon-192.png')
+      $bytes = $client.DownloadData("http://localhost:$port/icon-192.png")
       $stream = New-Object System.IO.MemoryStream(, $bytes)
       $bitmap = [System.Drawing.Bitmap]::FromStream($stream)
       return [System.Drawing.Icon]::FromHandle($bitmap.GetHicon())
     } catch {
-      Start-Sleep -Milliseconds 500
+      Start-Sleep -Milliseconds 400
     }
   }
 
   return [System.Drawing.SystemIcons]::Application
 }
 
-# Every guest invite, ready to paste into a message.
-function Get-FriendLinks {
-  try {
-    $configPath = Join-Path $root 'config.json'
-    $dbPath = Join-Path $root 'data\airchat.json'
-
-    if (-not (Test-Path -LiteralPath $configPath)) { return $null }
-    if (-not (Test-Path -LiteralPath $dbPath)) { return $null }
-
-    $cfg = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-    if (-not $cfg.publicUrl) { return $null }
-
-    $db = Get-Content -LiteralPath $dbPath -Raw | ConvertFrom-Json
-    $base = ([string]$cfg.publicUrl).TrimEnd('/')
-
-    $out = ''
-    foreach ($guest in @($db.guests)) {
-      $title = [string]$guest.name
-
-      $match = @($db.conversations | Where-Object { $_.id -eq $guest.conversationId })
-      if ($match.Count -gt 0 -and $match[0].title) { $title = [string]$match[0].title }
-
-      $out += "$title`r`n$base/?guest=$($guest.token)`r`n`r`n"
-    }
-
-    if (-not $out) { return $null }
-    return $out.Trim()
-  } catch {
-    return $null
-  }
-}
-
 try {
   $notify = New-Object System.Windows.Forms.NotifyIcon
   $notify.Icon = Get-AirChatIcon
 
-  $tip = if ($url) { "AirChat - $url" } else { 'AirChat (no public link)' }
+  $link = Get-AirChatLink
+  $tip = if ($link) { "AirChat - $link" } else { 'AirChat is running' }
   $notify.Text = $tip.Substring(0, [Math]::Min(63, $tip.Length))
 
   $menu = New-Object System.Windows.Forms.ContextMenuStrip
   $openItem = $menu.Items.Add('Open AirChat')
-  $linkItem = $menu.Items.Add('Copy friend links')
-  # There is no window to show any more, so this shows what AirChat printed
-  # instead - the reason a link or a start-up failed is in there.
   $logItem = $menu.Items.Add('Open the log')
-  # Add(string) would create a menu item labelled "-"; a separator needs the type.
   [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-  $stopItem = $menu.Items.Add('Stop AirChat')
+
+  # The item says what it will actually do. When this script started AirChat it
+  # can stop it; when AirChat was already open, it belongs to whoever opened it,
+  # so the most this icon can do is get out of the way.
+  $stopLabel = if ($proc) { 'Quit AirChat' } else { 'Hide this icon' }
+  $stopItem = $menu.Items.Add($stopLabel)
+
   $notify.ContextMenuStrip = $menu
 
-  $openAirChat = { Start-Process 'http://localhost:4000' }
-  $openItem.add_Click($openAirChat)
-  $notify.add_DoubleClick($openAirChat)
-
-  $linkItem.add_Click({
-    $links = Get-FriendLinks
-
-    if ($links) {
-      Set-Clipboard -Value $links
-      # These addresses carry no chat key: the key never leaves the browser that
-      # made it. Saying so here stops a locked chat being shared with a link that
-      # cannot open it.
-      $notify.ShowBalloonTip(5000, 'AirChat', 'Friend links copied. For a locked chat, copy the link from Invite instead - that one carries the key.', 'Info')
-    } else {
-      $notify.ShowBalloonTip(5000, 'AirChat', 'No friend links to copy. Open AirChat, click Invite in a chat, and use Copy there.', 'Info')
+  # Starting the app again is how a window is requested: it already holds the
+  # single-instance lock, and its second-instance handler shows the window. No
+  # second server, no new port, no new folder.
+  $showWindow = {
+    try {
+      if (Test-Path -LiteralPath $devExe -PathType Leaf) {
+        Start-Process -FilePath $devExe -ArgumentList @("`"$root`"") | Out-Null
+      } else {
+        Start-Process -FilePath $exe | Out-Null
+      }
+    } catch {
+      Show-AirChatNotice("AirChat could not open its window.`r`n`r`n$($_.Exception.Message)")
     }
-  })
+  }
+
+  $openItem.add_Click($showWindow)
+  $notify.add_DoubleClick($showWindow)
 
   $logItem.add_Click({
-    if (Test-Path -LiteralPath $logPath) { Start-Process notepad.exe $logPath }
+    if (Test-Path -LiteralPath $appLog) { Start-Process notepad.exe $appLog }
     else { $notify.ShowBalloonTip(5000, 'AirChat', 'No log yet - nothing has been written.', 'Info') }
   })
 
@@ -216,30 +219,32 @@ try {
     [System.Windows.Forms.Application]::Exit()
   })
 
-  # Make sure the icon is on before hiding the window behind it.
   $notify.Visible = $true
+  $notify.ShowBalloonTip(
+    6000,
+    'AirChat is running',
+    'Double-click the icon to open it. If you cannot see it, click the ^ arrow by the clock.',
+    'Info'
+  )
 
-  Hide-AirChatWindow
-  $notify.ShowBalloonTip(6000, 'AirChat is running', 'Double-click the tray icon to open AirChat. If you cannot see it, click the ^ arrow by the clock.', 'Info')
-
-  # The icon must never outlive the server behind it. A second launcher stops an
-  # old AirChat on purpose, and a crash does the same thing by accident; either
-  # way an icon that still says "AirChat is running" and opens nothing is worse
-  # than no icon at all. So watch the child and leave with it.
+  # An icon that outlives its app is worse than no icon: it says AirChat is
+  # running and opens nothing. So the icon leaves when the app does.
   $watchdog = New-Object System.Windows.Forms.Timer
   $watchdog.Interval = 2000
   $watchdog.add_Tick({
-    if (-not $proc.HasExited) { return }
+    $alive = if ($proc) { -not $proc.HasExited } else { Test-AirChatRunning }
+
+    if ($alive) { return }
 
     $watchdog.Stop()
 
-    # Stopping from the menu is meant; anything else is AirChat dying under its
-    # own icon, and with no window that has to be said out loud or not at all.
     if (-not $script:stopping) {
-      Show-AirChatNotice("AirChat stopped (exit $($proc.ExitCode)).`r`n`r`n" +
-        "Run `"Start AirChat in Tray.bat`" to start it again.`r`n`r`n" +
-        "If it keeps happening, use ``Open the log`` in the tray menu,`r`n" +
-        "or run `"Start AirChat + Public Link.bat`" to watch it start.")
+      Show-AirChatNotice(
+        "AirChat stopped.`r`n`r`n" +
+        "Run `"Start AirChat in Tray.bat`" to start it again, or`r`n" +
+        "`"Start AirChat.bat`" to watch it start in a window.`r`n`r`n" +
+        "The log is in the tray menu next time it is running."
+      )
     }
 
     [System.Windows.Forms.Application]::Exit()
@@ -251,7 +256,8 @@ try {
   $watchdog.Stop()
   $watchdog.Dispose()
 
-  # Reached when Stop is chosen: take the server and the tunnel down with us.
+  # Only the copy this script started is stopped. An AirChat that was already
+  # open before the tray was asked for is somebody else's window to close.
   $notify.Visible = $false
   $notify.Dispose()
 
@@ -259,17 +265,17 @@ try {
     taskkill /PID $proc.Id /T /F | Out-Null
   }
 } catch {
-  # Never leave AirChat running headless just because the icon failed.
   if ($notify) { $notify.Visible = $false }
 
   if ($proc -and -not $proc.HasExited) {
     taskkill /PID $proc.Id /T /F | Out-Null
   }
 
-  Show-AirChatNotice("AirChat could not move to the notification area:`r`n`r`n" +
+  Show-AirChatNotice(
+    "AirChat could not move to the notification area:`r`n`r`n" +
     "$($_.Exception.Message)`r`n`r`n" +
-    "It has been stopped. Run `"Start AirChat + Public Link.bat`" instead,`r`n" +
-    'which keeps a window you can watch.')
+    "Run `"Start AirChat.bat`" instead, which keeps a window you can watch."
+  )
 
   exit 1
 }
