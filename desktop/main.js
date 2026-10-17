@@ -34,7 +34,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { spawnSync } = require('child_process');
-const { app, BrowserWindow, Menu, shell, dialog, session } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog, session, ipcMain } = require('electron');
 
 // One name, so a development run and an installed copy read the same folder
 // instead of quietly being two different AirChats with two sets of chats.
@@ -327,6 +327,10 @@ function createWindow() {
     log('window ready; showing it');
     mainWindow.show();
   });
+  mainWindow.on('close', () => {
+    log('a close was requested on the window');
+  });
+
   mainWindow.on('closed', () => {
     log('the window was closed');
     mainWindow = null;
@@ -509,6 +513,16 @@ if (!app.requestSingleInstanceLock()) {
 
   // Take the tunnel down with the app. A tunnel left running would keep a public
   // address alive that points at a server that is no longer there.
+  // What the window says about itself, into the same log (see desktop/preload.js).
+  ipcMain.on('airchat:note', (event, message) => {
+    log(`from the window: ${message}`);
+  });
+
+  app.on('before-quit', () => {
+    const from = new Error('who asked').stack.split('\n').slice(1, 4).join(' | ');
+    log(`quitting; requested by ${from}`);
+  });
+
   app.on('will-quit', () => {
     if (tunnel) tunnel.stop();
   });

@@ -469,6 +469,30 @@ class Store {
     return guest;
   }
 
+  /**
+   * Remember the friend code this chat is reachable by.
+   *
+   * The address behind a code changes every time the app starts, so the code (and
+   * the secret that proves it is ours) is kept with the invite: that is what lets
+   * the next launch move the same six characters to the new address instead of
+   * handing out a code that quietly stopped working.
+   */
+  setGuestCode(conversationId, code) {
+    const guest = this.data.guests.find((g) => g.conversationId === conversationId);
+    if (!guest) return null;
+
+    guest.code = code.code || '';
+    guest.codeSecret = code.secret || '';
+    guest.codeExpiresAt = Number(code.expiresAt) || 0;
+    this.save();
+    return guest;
+  }
+
+  /** Every invite that has a code attached, for moving them to a new address. */
+  guestsWithCodes() {
+    return this.data.guests.filter((guest) => guest.code && guest.codeSecret);
+  }
+
   revokeGuest(conversationId) {
     const before = this.data.guests.length;
     this.data.guests = this.data.guests.filter((guest) => guest.conversationId !== conversationId);

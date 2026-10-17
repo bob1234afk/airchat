@@ -75,6 +75,18 @@ const DEFAULTS = {
   twilio: { accountSid: '', authToken: '', fromNumber: '' },
   telegram: { botToken: '' },
   mock: { autoReply: true, latencyMs: 1200 },
+  /**
+   * Where friend codes live.
+   *
+   * A six-character code cannot carry an address, so a small directory turns it
+   * back into "where is that app right now". Point this at your own deployment of
+   * directory/ if you would rather run it yourself; the app works without it and
+   * simply says codes are unavailable.
+   */
+  friendCodes: {
+    directory: 'https://site-7f015d99cb0e43f98814f3a7512c55bb.freebuff.page',
+    minutes: 720,
+  },
   /** Shown in the UI; the real name is a TODO for you to fill in later. */
   appName: 'AirChat',
 };
@@ -145,6 +157,10 @@ function envOverrides() {
   if (pick('TELEGRAM_BOT_TOKEN')) {
     out.telegram = { botToken: pick('TELEGRAM_BOT_TOKEN') };
   }
+
+  // Point friend codes at your own directory, or at a stub during a test.
+  const codesUrl = pick('AIRCHAT_CODES_URL');
+  if (codesUrl) out.friendCodes = { directory: codesUrl.replace(/\/+$/, '') };
 
   return out;
 }

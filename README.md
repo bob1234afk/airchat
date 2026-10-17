@@ -318,55 +318,68 @@ for notifications once, and keeps its files in its own folder.
 
 ## Talking to your friend
 
-### The same Wi-Fi (30 seconds, free)
+### A code, not a link
 
-Click **Invite** in a chat. It gives you a link like
-`http://192.168.1.20:4000/?guest=…`. Text that link to your friend. They open it
-on their phone and they are in that one conversation — nothing to install.
+Click **Invite** in a chat and you get six characters, like `E2LEXR`. Send them
+those six characters however you like — they are short enough to read out over
+the phone. Your friend opens
+
+<https://site-7f015d99cb0e43f98814f3a7512c55bb.freebuff.page>
+
+and types the code. They land in that one conversation, on their phone, with
+nothing to install and no account.
+
+A code cannot carry an address, so a small directory does that one job: your app
+registers `code → where it is right now`, and the page asks the directory and
+forwards them. The directory holds nothing but the code, the address, an expiry,
+and a secret that proves the code is yours — no names, no messages, and it will
+only ever forward someone to a `trycloudflare.com` address.
+
+The interesting part is what a code *does* keep: the chat key. The six characters
+resolve to your invite **including** the part after `#`, which the browser never
+sends to any server. So the key reaches your friend and never reaches the
+directory.
+
+**A code works while AirChat is open.** Close it and the directory has nothing to
+forward to; the page says the code is not active rather than showing a browser
+error. The next time AirChat starts it takes a new address, and the codes you
+already handed out are moved to it — the same six characters keep working, for up
+to twelve hours.
+
+Run it yourself instead of using the hosted directory:
+
+```bat
+directory\       a small Cloudflare Worker + D1 table (npm run check:codes-service)
+npm run check:codes   proves the app hands out a code that resolves back to its own invite
+```
+
+Point the app at your own copy with `AIRCHAT_CODES_URL`, or set
+`friendCodes.directory` in `config.json`.
+
+### The same Wi-Fi
+
+Codes need the public link (below). With no internet, Invite still offers the
+Wi-Fi address — `http://192.168.1.20:4000/?guest=…` — which works on your own
+network only.
 
 Browsers only allow encryption on a secure address: `https://`, or `localhost`.
-A plain `http://192.168.x.x` page therefore cannot lock a single message. When
-the public link is running, AirChat quietly forwards a Wi-Fi visitor to it —
-the invite and the `#k=…` key travel with them — so the Wi-Fi link still ends up
-in the encrypted chat. With no public link there is nowhere safe to go, and
-AirChat says so instead of appearing to work: read that chat over `https://`.
+A plain `http://192.168.x.x` page therefore cannot lock a single message, so a
+Wi-Fi visitor is quietly forwarded to the public address when there is one, and
+AirChat says so plainly when there is not.
 
 ### From anywhere (free, still your laptop)
 
-Your laptop is not reachable from the internet by default. A tunnel fixes that
-for free and with no account:
+Your laptop is not reachable from the internet by default. The app opens the
+tunnel itself on every launch; if you are running the server by hand instead:
 
 1. Once only: **`Install Cloudflared (one time).bat`**
 2. Every time: **`Start AirChat + Public Link.bat`** (or the tray launcher)
 
-The launcher opens a Cloudflare Quick Tunnel, saves the `https://something.trycloudflare.com`
-address as `publicUrl`, and prints the link to send each friend. Invite links will
-then work from anywhere. Your laptop still does all the work.
-
-**That address lives exactly as long as that window does.** Close the window,
-stop it from the tray, or restart the PC, and the tunnel is gone — a friend who
-taps the old link sees `ERR_NAME_NOT_RESOLVED` / "server IP address could not be
-found". Nothing is broken and nothing was hacked; the address simply stopped
-existing. Start the launcher again and send the new link.
-
-AirChat knows this, so it will not pretend otherwise: while the tunnel runs it
-refreshes a "this link is still alive" stamp every 20 seconds, clears the link
-when it stops, and refuses to hand out one whose stamp has gone quiet. The Invite
-window says the public link expired instead of offering one that cannot open.
-The same stamp lets a running AirChat pick up an address that appears after it
-started, so starting the tunnel second no longer leaves Invite handing out a
-Wi-Fi-only link for the rest of the session.
-
-The launcher also looks after the two things that used to send friends to a dead
-link. If an older AirChat still holds the port, it stops that copy *before*
-opening a tunnel, so no address is ever saved without a server behind it. Then,
-after AirChat is up, it asks the internet whether the new address answers and
-says so in the window — `the link answers` means that is the address to send.
-
-**Copy the link from Invite, not from the terminal window.** The launcher can
-print the address, but the key that unlocks an encrypted chat only exists in your
-browser, so a link printed by the terminal opens the chat with nothing to unlock
-it. The Invite window is the copy that carries the key.
+Either way a free Cloudflare Quick Tunnel is what makes a code reachable, and
+that address lives exactly as long as the process behind it. AirChat knows this:
+it forgets the previous run's address at startup, refreshes a "still alive" stamp
+every 20 seconds, withdraws an address whose stamp has gone quiet, and never
+hands one out that cannot open.
 
 ---
 

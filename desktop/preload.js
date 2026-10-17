@@ -19,7 +19,39 @@
  * below.
  */
 
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
+
+/**
+ * Tell the app's log what the window is doing.
+ *
+ * A window that closes itself leaves no trace at all from this side - the main
+ * process only sees "a close was requested" - so the one thing that can explain
+ * it, the caller's stack, is sent to the log. It is also used to report a page
+ * error, so a broken interface says so instead of going quiet.
+ */
+function note(message) {
+  try {
+    ipcRenderer.send('airchat:note', String(message).slice(0, 500));
+  } catch (err) {
+    // Reporting must never be the thing that fails.
+  }
+}
+
+// Called before the page's own scripts run, so nothing can close the window
+// without being named.
+const originalClose = window.close.bind(window);
+window.close = function airchatClose() {
+  note(`window.close() called from ${new Error('why').stack.split('\n').slice(1, 4).join(' | ')}`);
+  return originalClose();
+};
+
+window.addEventListener('error', (event) => {
+  note(`page error: ${event.message} at ${event.filename}:${event.lineno}`);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  note(`unhandled rejection: ${(event.reason && event.reason.message) || event.reason}`);
+});
 
 /**
  * The version, handed down rather than read.

@@ -181,10 +181,16 @@ function connect(wsUrl) {
     const socket = new WebSocket(wsUrl);
     const pending = new Map();
     let nextId = 1;
+    let closed = false;
 
     socket.addEventListener('open', () => {
       resolve({
         async evaluate(expression) {
+          // Asking a socket that is already gone would leave this promise hanging
+          // for ever, and a check with nothing left to wait for exits silently in
+          // the middle of its own report.
+          if (closed) throw new Error('the app window is no longer there');
+
           const id = nextId;
           nextId += 1;
 
@@ -245,6 +251,15 @@ function connect(wsUrl) {
     });
 
     socket.addEventListener('error', () => reject(new Error('could not attach to the app')));
+
+    // A window that goes away mid-call would otherwise leave the promise pending
+    // for ever: no timers, no handles, and Node exits silently in the middle of
+    // the report - which reads exactly like the check crashing.
+    socket.addEventListener('close', () => {
+      closed = true;
+      for (const [, waiting] of pending) waiting.rej(new Error('the app window went away'));
+      pending.clear();
+    });
   });
 }
 
@@ -359,7 +374,7 @@ async function main() {
     process.exit(1);
   }
 
-  const client = attached.client;
+  let client = attached.client;
 
   try {
     /* ---- 1. the app knows it is the app ------------------------------ */
@@ -491,6 +506,15 @@ async function main() {
 
     /* ---- 5. keys survive a reload ------------------------------------ */
 
+    // Reload only once the page has finished its own first load: asked to reload
+    // while the initial navigation is still committing, the window can tear down
+    // before it is ever really up, which reads as "the app closed itself".
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const ready = await client.evaluate('document.readyState').catch(() => null);
+      if (ready === 'complete') break;
+      await sleep(250);
+    }
+
     await client.evaluate('location.reload()');
     await sleep(2500);
 
@@ -499,6 +523,14 @@ async function main() {
       fail('the app window did not come back after a reload');
     } else {
       const client2 = afterReload.client;
+
+      // The page was reloaded, so the connection from before it is spent. Every
+      // section below has to talk to the window that exists now, not the one that
+      // was there when the check started.
+      const previous = client;
+      client = client2;
+      previous.close();
+
       try {
         const remembered = await client2.evaluate(
           `JSON.stringify(Object.keys(JSON.parse(window.localStorage.getItem('airchat.keys') || '{}')).length)`
@@ -540,7 +572,8 @@ async function main() {
           );
         }
       } finally {
-        client2.close();
+        // Left open on purpose: the sections after this one use it, and the whole
+        // check closes it once.
       }
     }
 
@@ -577,9 +610,11 @@ async function main() {
     heading('The public link');
 
     const readLink = () =>
-      client.evaluate(
-        `fetch('/api/state').then((r) => r.json()).then((s) => ({ publicUrl: s.server.publicUrl || '', expired: !!s.server.publicUrlExpired }))`
-      );
+      client
+        .evaluate(
+          `fetch('/api/state').then((r) => r.json()).then((s) => ({ publicUrl: s.server.publicUrl || '', expired: !!s.server.publicUrlExpired }))`
+        )
+        .catch((err) => ({ publicUrl: '', expired: false, error: err.message }));
 
     // A fresh cloudflared takes a while to get an address - it has to reach
     // Cloudflare, be given one, and write it - so give it longer than any one
@@ -614,10 +649,15 @@ async function main() {
         // apart from a broken one.
         let answers = { status: 'not tried', body: '' };
 
-        for (let attempt = 0; attempt < 12; attempt += 1) {
+        for (let attempt = 0; attempt < 22; attempt += 1) {
           answers = await fetch(`${link.publicUrl}/`).then(
             async (response) => ({ status: response.status, body: (await response.text()).slice(0, 400) }),
-            (err) => ({ status: `no answer (${err.message})`, body: '' })
+            (err) => ({
+              // The cause is the part that says why: a name that does not resolve
+              // and a connection that is refused look identical without it.
+              status: `no answer (${err.message}${err.cause && err.cause.code ? `: ${err.cause.code}` : ''})`,
+              body: '',
+            })
           );
 
           if (answers.status === 200 && /<title>AirChat/i.test(answers.body)) break;

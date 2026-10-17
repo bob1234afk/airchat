@@ -1,48 +1,49 @@
 {
   "_comment": "Copy this file to config.json and fill in what you need. Every section is optional - the server merges whatever it finds over its built-in defaults. Nothing here is required to start AirChat and talk to a friend over AirChat itself.",
-
   "port": 4000,
   "openOnStart": true,
-
   "_publicUrl_comment": "Normally left alone: 'Start AirChat + Public Link.bat' fills this in with the tunnel's address and clears it again when the tunnel stops. Set it by hand only for a permanent address (see README) - AirChat then tests it once at startup, because a link that outlived its tunnel only looks real.",
   "publicUrl": "",
-
   "me": {
     "name": "Ishaan",
     "initials": "IS",
     "color": "#7C5CFF"
   },
-
   "_token_comment": "Leave empty to let AirChat generate one on first run. Local requests never need it; anyone connecting from outside your PC does.",
   "token": "",
-
   "_channels_comment": "What each channel actually sends through. 'mock' pretends to deliver so you can try the flow with zero accounts. 'off' disables the channel.",
   "channels": {
-    "imessage": { "adapter": "mock" },
-    "sms": { "adapter": "mock" },
-    "telegram": { "adapter": "off" }
+    "imessage": {
+      "adapter": "mock"
+    },
+    "sms": {
+      "adapter": "mock"
+    },
+    "telegram": {
+      "adapter": "off"
+    }
   },
-
   "_bluebubbles_comment": "Real blue-bubble iMessage. Requires BlueBubbles running on a Mac signed into your Apple ID.",
   "bluebubbles": {
     "serverUrl": "http://192.168.1.50:1234",
     "password": ""
   },
-
   "_twilio_comment": "Real SMS to any phone number. Needs a Twilio account with a sending number.",
   "twilio": {
     "accountSid": "",
     "authToken": "",
     "fromNumber": ""
   },
-
   "_telegram_comment": "Free and unlimited. Talk to @BotFather on Telegram to get a bot token.",
   "telegram": {
     "botToken": ""
   },
-
   "mock": {
     "autoReply": true,
     "latencyMs": 1200
+  },
+  "friendCodes": {
+    "directory": "https://site-7f015d99cb0e43f98814f3a7512c55bb.freebuff.page",
+    "minutes": 720
   }
 }

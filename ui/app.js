@@ -379,7 +379,7 @@
 
     if (!keyFor(message.conversationId)) {
       return {
-        text: 'Encrypted. Open the invite link for this chat on this device to read it.',
+        text: 'Encrypted. Use the friend code for this chat on this device to read it.',
         encrypted: true,
         readable: false,
       };
@@ -621,7 +621,7 @@
         // exactly what to do rather than leaving them staring at a padlock.
         banner(
           'This chat is end-to-end encrypted, but this device does not have the key yet. ' +
-            'Ask for the invite link again and open it here.'
+            'Ask for the code again and use it here.'
         );
       }
     }
@@ -973,8 +973,8 @@
     // side, so asking for one is the guest's whole move.
     if (locking === 'guest-no-key') {
       const who = state.peer && state.peer.name ? state.peer.name : 'the other person';
-      const off = el('span', 'lock-off', 'Ask for a new invite link');
-      off.title = `Nothing sent here is locked yet. Ask ${who} for the invite link again and open it in this browser.`;
+      const off = el('span', 'lock-off', 'Ask for a new code');
+      off.title = `Nothing sent here is locked yet. Ask ${who} for the code again and use it in this browser.`;
       return off;
     }
 
@@ -1750,6 +1750,32 @@
   }
 
   /**
+   * The six characters, big enough to read out loud.
+   *
+   * It keeps a real input element so the copy button still has something to
+   * select when the clipboard API is unavailable - which is every non-secure
+   * context, including a plain Wi-Fi address.
+   */
+  function codeBox(value) {
+    const box = el('div', 'code-box');
+
+    const input = document.createElement('input');
+    input.readOnly = true;
+    input.value = value;
+    input.spellcheck = false;
+    input.className = 'code-input';
+    input.setAttribute('aria-label', 'Friend code');
+
+    const copy = el('button', 'btn btn-quiet', 'Copy code');
+    copy.type = 'button';
+    copy.addEventListener('click', () => copyInto(value, copy));
+
+    box.appendChild(input);
+    box.appendChild(copy);
+    return box;
+  }
+
+  /**
    * Ask an address whether anything is there.
    *
    * A cross-origin request in "no-cors" mode cannot read the answer, and does
@@ -1885,47 +1911,42 @@
    * Modal: invite this chat
    * ------------------------------------------------------------------ */
 
+  /**
+   * Modal: add a friend to this chat.
+   *
+   * A code rather than a link. Six characters are easy to say out loud or paste
+   * into a message, and the page they are typed into turns them back into where
+   * this copy of AirChat is right now - so the friend never has to be sent an
+   * address that changes every time the app starts.
+   */
   function openInvite(conversationId) {
     const conversation = findConversation(conversationId);
     if (!conversation) return;
 
     openModal(async (modal) => {
-      modal.appendChild(el('h3', null, `Invite ${conversation.title}`));
+      modal.appendChild(el('h3', null, `Add a friend to ${conversation.title}`));
       modal.appendChild(
-        el('p', 'modal-sub', 'They open this link on their phone and get just this one chat — nothing to install, no account.')
+        el(
+          'p',
+          'modal-sub',
+          'Send them this code. They open the AirChat page and type it — nothing to install, no account.'
+        )
       );
 
-      const loading = el('span', 'hint', 'Creating a link…');
+      const loading = el('span', 'hint', 'Making a code…');
       modal.appendChild(loading);
 
-      const links = await api('/api/conversations/invite', {
-        method: 'POST',
-        body: { conversationId },
-      });
-      loading.remove();
-
-      // The chat key travels in the part of the link after "#". A browser never
-      // sends that part to a server, so AirChat learns the invite and never the
-      // key - which makes the link the key, and only the two of you able to read
-      // the chat.
-      //
       // A chat that a phone network also carries cannot be encrypted, so it never
       // gets a key: that is what keeps the promise the chat header makes.
       const mirrored = Boolean(conversation.mirror && conversation.mirror !== 'none');
-      // The public address only exists while the tunnel process does, so a dead
-      // one is never offered as if it worked: it is the difference between "my
-      // friend cannot reach me" and "my friend is looking at a DNS error".
-      const publicUrl = state.server.publicUrl;
-      const expired = Boolean(state.server.publicUrlExpired);
       const hadKey = Boolean(keyFor(conversationId));
       const key = mirrored ? '' : ensureKey(conversationId);
       // A key that did not exist a moment ago cannot be in anybody else's hands,
-      // so the other side will not be able to read what is sent from now on
-      // until they open this link. Better said before it happens than after.
+      // so the other side will not be able to read what is sent from now on until
+      // they use this exact code.
       const brandNewKey = Boolean(key) && !hadKey;
 
       if (key && activeId) {
-        // A key made just now changes what the chat behind this window can show.
         const current = findConversation(activeId);
         if (current) renderChatHeader(current);
         renderMessages({});
@@ -1934,18 +1955,32 @@
       const withKey = (url) =>
         key ? `${url}#k=${encodeURIComponent(key)}&c=${encodeURIComponent(conversationId)}` : url;
 
+      const answer = await api('/api/conversations/invite', {
+        method: 'POST',
+        body: { conversationId, key },
+      });
+
+      const made = answer.code || {
+        ok: false,
+        reason: 'unavailable',
+        detail: 'This copy of AirChat could not reach the friend code service.',
+        page: '',
+      };
+
+      loading.remove();
+
       if (key) {
         openInvitePrivacy(modal, key);
 
         if (brandNewKey) {
           const them = conversation.isGroup ? 'Everyone in this chat' : conversation.title;
           const fresh = el('div', 'encrypted-note encrypted-warn');
-          fresh.appendChild(el('strong', null, 'Send this new link now. '));
+          fresh.appendChild(el('strong', null, 'Send this new code now. '));
           fresh.appendChild(
             el(
               'span',
               null,
-              `${them} cannot read what you send until they open this exact link \u2014 an older one ` +
+              `${them} cannot read what you send until they use this exact code — an older one ` +
                 'carries nothing to unlock with. Messages from before now stay as they were.'
             )
           );
@@ -1953,73 +1988,65 @@
         }
       } else {
         const note = el('div', 'encrypted-note encrypted-warn');
-        note.appendChild(el('strong', null, 'This link is not end-to-end encrypted. '));
+        note.appendChild(el('strong', null, 'This chat is not end-to-end encrypted. '));
         note.appendChild(el('span', null, unencryptedReason(conversation)));
         modal.appendChild(note);
       }
 
-      if (expired) {
-        const gone = el('div', 'encrypted-note encrypted-warn');
-        gone.appendChild(el('strong', null, 'The public link from last time has expired. '));
-        gone.appendChild(
-          el(
-            'span',
-            null,
-            'The link below only works on your Wi-Fi. For one that works anywhere, close AirChat, ' +
-              'start it with "Start AirChat + Public Link.bat", then open Invite again - the address ' +
-              'changes every time AirChat starts.'
-          )
-        );
-        modal.appendChild(gone);
-      }
+      if (made.ok) {
+        modal.appendChild(codeBox(made.code));
 
-      if (!publicUrl && !expired) {
-        // The single most common "the link does not work": a link that was
-        // never public at all. A friend on another network cannot open
-        // 192.168.x.x, and nothing about the address says so.
-        const local = el('div', 'encrypted-note encrypted-warn');
-        local.appendChild(el('strong', null, 'This link only works on your Wi-Fi. '));
-        local.appendChild(
-          el(
-            'span',
-            null,
-            'For a friend anywhere, close AirChat, start it with "Start AirChat + Public Link.bat", ' +
-              'then open Invite again and copy the new link. That address is different every time.'
-          )
-        );
-        modal.appendChild(local);
-      }
-
-      modal.appendChild(linkBox(withKey(links.guestUrl)));
-
-      if (publicUrl) {
+        const when = made.expiresAt ? new Date(made.expiresAt).toLocaleString() : '';
         modal.appendChild(
           el(
             'span',
             'hint',
-            'This address lasts only while the public-link window stays open. Close that window ' +
-              'and the link stops working - start it again and send the new one.'
+            `They type it at ${made.page}. It keeps working until ${when} — or until this copy of AirChat closes.`
           )
         );
 
-        const test = el('button', 'btn btn-quiet', 'Test this link');
+        const test = el('button', 'btn btn-quiet', 'Check this code');
         test.type = 'button';
         test.style.width = '100%';
         test.addEventListener('click', async () => {
           test.disabled = true;
           test.textContent = 'Checking…';
-          const alive = await linkAnswers(withKey(links.guestUrl));
+          const alive = await linkAnswers(`${made.page}/c/${made.code}`);
           test.disabled = false;
-          test.textContent = 'Test this link';
+          test.textContent = 'Check this code';
 
           banner(
             alive
-              ? 'That address answered, so this link should open anywhere.'
-              : 'That address did not answer. The tunnel behind it has probably closed - ' +
-                'start "Start AirChat + Public Link.bat" again and send the new link.'
+              ? 'That code found your app, so it should work for them too.'
+              : 'That code did not answer. AirChat has to stay open for a code to find it.'
           );
         });
         modal.appendChild(test);
+      } else {
+        // No code means nothing here can reach past this Wi-Fi. Say what is
+        // missing and offer the one thing that still works, rather than a code
+        // that would fail in their hands.
+        const why = el('div', 'encrypted-note encrypted-warn');
+        why.appendChild(el('strong', null, 'No code right now. '));
+        why.appendChild(
+          el(
+            'span',
+            null,
+            made.reason === 'no public link'
+              ? 'A code only works while AirChat has a public link, and this copy does not have one, ' +
+                  'so a friend on another network could not reach you.'
+              : `${made.detail} Check your internet connection, then open this window again.`
+          )
+        );
+        modal.appendChild(why);
+
+        if (answer.guestUrl) {
+          modal.appendChild(el('div', 'section-label', 'Or send them this link'));
+          modal.appendChild(linkBox(withKey(answer.guestUrl)));
+          modal.appendChild(
+            el('span', 'hint', 'It only works on your Wi-Fi unless AirChat has a public link.')
+          );
+        }
       }
 
       if (key) {
@@ -2027,13 +2054,13 @@
           el(
             'span',
             'hint',
-            'The link is the key: whoever holds it can read this chat, so send it only to them. ' +
-              'Anyone without it gets nothing but unreadable text.'
+            'The code is the key: whoever uses it can read this chat, so send it only to them. ' +
+              'Anyone else gets nothing but unreadable text.'
           )
         );
       }
 
-      // The link is the password, so there has to be a way to change the lock.
+      // The code is the password, so there has to be a way to change the lock.
       // Cancelling is instant: the server forgets the invite, and the cookie a
       // friend's phone kept is checked against that list on every request.
       const stop = el('button', 'btn btn-danger', 'Stop sharing this chat');
@@ -2048,8 +2075,8 @@
 
           banner(
             result.revoked
-              ? `The link to this chat no longer works. ${conversation.title} would need a new one.`
-              : 'Nothing to cancel - this chat has no invite link yet.'
+              ? `That code no longer opens ${conversation.title}. They would need a new one.`
+              : 'Nothing to cancel - this chat has no code yet.'
           );
           closeModal();
         } catch (err) {
@@ -2061,30 +2088,18 @@
         el(
           'span',
           'hint',
-          'Cancels the link. They keep anything they have already seen; whatever you send ' +
-            'from now on is closed to them. Invite again for a new link.'
+          'Cancels the code. They keep anything they have already seen; whatever you send ' +
+            'from now on is closed to them. Invite again for a new code.'
         )
       );
 
       const list = el('div', 'meta-list');
-      const reachable = publicUrl
-        ? 'Anywhere, over the internet'
-        : expired
-          ? 'Only on your Wi-Fi - the public link expired'
-          : 'Only while on your Wi-Fi';
+      const reachable = made.ok
+        ? 'Anywhere, over the internet - through their code'
+        : 'Only while on your Wi-Fi';
       list.appendChild(metaRow('Reachable', reachable));
-      list.appendChild(metaRow('Same PC', withKey(links.localGuestUrl)));
-
-      if (!publicUrl) {
-        list.appendChild(
-          metaRow(
-            'To reach them anywhere',
-            expired
-              ? 'Start AirChat with "Start AirChat + Public Link.bat", then Invite again'
-              : 'Start AirChat with "Start AirChat + Public Link.bat" for a public link'
-          )
-        );
-      }
+      list.appendChild(metaRow('Same PC', withKey(answer.localGuestUrl)));
+      if (made.ok) list.appendChild(metaRow('Code', made.code));
 
       modal.appendChild(el('div', 'section-label', 'Details'));
       modal.appendChild(list);
@@ -2262,7 +2277,7 @@
       alertList.appendChild(
         metaRow(
           'On a phone',
-          isGuest ? 'Add this page to your home screen' : 'Send an invite link, then add it to the home screen'
+          isGuest ? 'Add this page to your home screen' : 'Send a friend code, then add it to the home screen'
         )
       );
       modal.appendChild(alertList);
@@ -2302,7 +2317,7 @@
             'is which.\n\n' +
             'A chat made before AirChat could lock anything, or one nobody has been invited to ' +
             'since, has no key yet - so nothing in it is locked. Its header says "Not encrypted ' +
-            'yet" and offers to lock it; the key then travels in the next invite link you send.\n\n' +
+            'yet" and offers to lock it; the key then travels with the next code you send.\n\n' +
             'The key to a chat lives in the browsers that share it. Nobody — including whoever runs ' +
             'this computer — can read that chat without it, and if every device with the key is lost, ' +
             'the messages cannot be recovered either.'

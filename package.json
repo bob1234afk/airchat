@@ -10,6 +10,8 @@
     "app": "electron .",
     "doctor": "node tools/doctor.js",
     "check:app": "node tools/check-app.js",
+    "check:codes": "node tools/check-codes.js",
+    "check:codes-service": "node directory/test.js",
     "icon": "node tools/make-icon.js",
     "build:mac": "node packaging/mac/build-mac.js",
     "build:ipa": "node packaging/ios/build-ipa.js",
