@@ -8,7 +8,7 @@
  * startup:
  *
  *   1. Node version and the APIs AirChat relies on
- *   2. that every JavaScript file parses
+ *   2. that every JavaScript file parses (as a script, or as an ES module)
  *   3. that each server module loads and exports what the others expect
  *   4. that the UI files exist, and that app.js only asks for elements that
  *      index.html actually defines
@@ -20,6 +20,7 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const net = require('net');
@@ -65,7 +66,8 @@ function heading(text) {
   console.log(`\n${text}`);
 }
 
-const SKIP_DIRS = new Set(['node_modules', 'data', 'dist', '.git']);
+/** Generated output, never source: nothing here is worth parsing or reporting. */
+const SKIP_DIRS = new Set(['node_modules', 'data', 'dist', 'dist-site', 'build', 'artifacts', '.git']);
 
 function collectJavaScript(dir, into) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -74,6 +76,41 @@ function collectJavaScript(dir, into) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) collectJavaScript(full, into);
     else if (entry.name.endsWith('.js')) into.push(full);
+  }
+}
+
+/**
+ * Is this file written as an ES module rather than a plain script?
+ *
+ * AirChat's own source is CommonJS, but the landing page's Worker is an ES
+ * module (that is what the hosting runs), and `new vm.Script` refuses one. So a
+ * file that starts with import/export is checked a second way instead of being
+ * reported as broken. The pattern is deliberately anchored: a line that merely
+ * mentions "export" inside a string or a comment must not change how the file is
+ * read.
+ */
+function looksLikeModule(source) {
+  return /^\s*(?:import|export)\b/m.test(source);
+}
+
+/**
+ * Parse an ES module without running anything of ours from disk.
+ *
+ * A data: URL is the whole trick: it parses the source as a module and has no
+ * filesystem to resolve against, so this can never accidentally execute the
+ * file being checked, and a relative import in it cannot pull in a real module.
+ */
+async function parsesAsModule(source) {
+  const encoded = Buffer.from(source, 'utf8').toString('base64');
+
+  try {
+    await import(`data:text/javascript;base64,${encoded}`);
+    return { ok: true, note: 'ES module' };
+  } catch (err) {
+    // A module that imports something relative has nothing to resolve against
+    // here, so only a syntax error counts against it.
+    if (err instanceof SyntaxError) return { ok: false, detail: err.message };
+    return { ok: true, note: 'ES module (imports not resolved here)' };
   }
 }
 
@@ -213,6 +250,132 @@ function checkElementIds() {
   }
 }
 
+/**
+ * Prove the public link really works, without needing cloudflared installed.
+ *
+ * The public address is what makes an invite openable from another house, and it
+ * is also the thing most likely to be quietly wrong: an address saved after its
+ * tunnel died is a friend staring at DNS. Running the real module against a
+ * stand-in cloudflared checks the parts that would rot silently - reading the
+ * address out of the output, stamping config.json, refreshing that stamp, and
+ * clearing it on the way out - and leaves the machine as it found it.
+ */
+async function checkPublicLink() {
+  heading('Public link');
+
+  const modulePath = path.join(ROOT, 'server', 'tunnel.js');
+  if (!fs.existsSync(modulePath)) {
+    fail('server/tunnel.js is missing - the app and the tunnel launcher both need it');
+    return;
+  }
+
+  let Tunnel;
+  try {
+    ({ Tunnel } = require(modulePath));
+  } catch (err) {
+    fail('server/tunnel.js failed to load', err.message);
+    return;
+  }
+
+  if (typeof Tunnel !== 'function') {
+    fail('server/tunnel.js does not export Tunnel');
+    return;
+  }
+
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-tunnel-'));
+  const configPath = path.join(work, 'config.json');
+  const stubPath = path.join(work, 'stub-cloudflared.js');
+
+  try {
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ token: 'keep-me', port: 4000 }, null, 2)}\n`,
+      'utf8'
+    );
+
+    // What a real cloudflared prints, including the banner, so the address has to
+    // be found inside noise rather than at the start of a line.
+    fs.writeFileSync(
+      stubPath,
+      [
+        "console.log('2026-10-17 INF Requesting new quick Tunnel on trycloudflare.com...');",
+        'setTimeout(() => console.log(' +
+          "'2026-10-17 INF |  https://doctor-check.trycloudflare.com  |'), 120);",
+        'setInterval(() => {}, 1000);',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const tunnel = new Tunnel({
+      binary: process.execPath,
+      args: [stubPath],
+      configPath,
+      heartbeatMs: 200,
+    });
+
+    const result = await tunnel.start();
+
+    if (!result.ok || !/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(result.url || '')) {
+      fail('the tunnel address was not recognised', result.detail || `got: ${JSON.stringify(result)}`);
+      return;
+    }
+    pass(`the address is read out of cloudflared's output: ${result.url}`);
+
+    const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (saved.publicUrl !== result.url) {
+      fail('the address was not saved to config.json', `publicUrl is ${JSON.stringify(saved.publicUrl)}`);
+      return;
+    }
+    pass('it is saved to config.json, so invite links can use it');
+
+    if (saved.token !== 'keep-me') {
+      fail('saving the address overwrote other settings in config.json');
+      return;
+    }
+    pass('nothing else in config.json is disturbed');
+
+    const stale = () => Date.now() - Number(saved.publicUrlAt) > PUBLIC_URL_MAX_AGE_MS;
+    if (!(Number(saved.publicUrlAt) > 0) || stale()) {
+      fail('the address was saved without a usable proof-of-life stamp');
+      return;
+    }
+    pass('it carries the time it was last known good');
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const refreshed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (!(Number(refreshed.publicUrlAt) > Number(saved.publicUrlAt))) {
+      fail('the stamp is not refreshed while the tunnel runs, so the link would look dead');
+      return;
+    }
+    pass('the stamp is refreshed while the tunnel is up');
+
+    tunnel.stop();
+    const cleared = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (cleared.publicUrl !== '' || Number(cleared.publicUrlAt) !== 0) {
+      fail('stopping the tunnel left the address in config.json', JSON.stringify(cleared.publicUrl));
+      return;
+    }
+    pass('stopping the tunnel withdraws the address, so no dead link can be handed out');
+
+    // No cloudflared at all is a normal state, not a crash.
+    const missing = await new Tunnel({ binary: 'airchat-no-such-binary', configPath }).start();
+    if (missing.ok || !/not installed/i.test(missing.detail || '')) {
+      fail('a missing cloudflared is not reported as "not installed"', JSON.stringify(missing));
+      return;
+    }
+    pass('a missing cloudflared is reported in words, not thrown');
+  } catch (err) {
+    fail('the public-link check crashed', err.message);
+  } finally {
+    try {
+      fs.rmSync(work, { recursive: true, force: true });
+    } catch (err) {
+      // A leftover temp folder is not worth failing the doctor over.
+    }
+  }
+}
+
 async function main() {
   console.log('AirChat doctor');
 
@@ -243,13 +406,23 @@ async function main() {
 
   for (const file of files) {
     const relative = path.relative(ROOT, file);
+    const source = fs.readFileSync(file, 'utf8');
+
     try {
       // Parse only. This never runs the file.
-      new vm.Script(fs.readFileSync(file, 'utf8'), { filename: file });
+      new vm.Script(source, { filename: file });
       pass(relative);
+      continue;
     } catch (err) {
-      fail(relative, err.message);
+      if (!looksLikeModule(source)) {
+        fail(relative, err.message);
+        continue;
+      }
     }
+
+    const module = await parsesAsModule(source);
+    if (module.ok) pass(`${relative}  (${module.note})`);
+    else fail(relative, module.detail);
   }
 
   /* ---- 3. server modules -------------------------------------------- */
@@ -267,6 +440,7 @@ async function main() {
       'parseTwilioWebhook',
     ],
     'server/router.js': ['Router'],
+    'server/tunnel.js': ['Tunnel', 'findCloudflared', 'writePublicUrl'],
   };
 
   for (const [relative, names] of Object.entries(EXPECTED)) {
@@ -327,6 +501,7 @@ async function main() {
   }
 
   await checkIcons();
+  await checkPublicLink();
 
   /* ---- 5. end-to-end encryption -------------------------------------- */
 
@@ -381,13 +556,20 @@ async function main() {
   heading('Configuration');
 
   let port = 4000;
-  const configPath = path.join(ROOT, 'config.json');
 
-  if (fs.existsSync(configPath)) {
+  // The desktop app keeps its files in its own folder, so that is the one that
+  // describes how the app will actually start; a config.json next to the code is
+  // what a folder-download copy used, and is still read if the app has none yet.
+  const appHome = process.env.APPDATA ? path.join(process.env.APPDATA, 'AirChat', 'home') : '';
+  const configPath = [appHome && path.join(appHome, 'config.json'), path.join(ROOT, 'config.json')].find(
+    (candidate) => candidate && fs.existsSync(candidate)
+  );
+
+  if (configPath) {
     try {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       if (parsed && Number(parsed.port)) port = Number(parsed.port);
-      pass('config.json parses');
+      pass(`config.json parses (${configPath.replace(ROOT, '.')})`);
 
       // A public link that outlived its tunnel is worse than no link at all: it
       // looks real here and fails in the friend's browser.
@@ -397,8 +579,8 @@ async function main() {
       if (savedUrl && Number.isFinite(stamp) && stamp > 0) {
         if (Date.now() - stamp > PUBLIC_URL_MAX_AGE_MS) {
           warn(
-            'config.json still holds a public link from an earlier run, which no longer exists - ' +
-              'start AirChat with "Start AirChat + Public Link.bat" for a fresh one'
+            'config.json holds a public link from an earlier run, which no longer exists - ' +
+              'the app opens a fresh one each time it starts, so this clears itself'
           );
         } else {
           pass('the public link in config.json is still fresh');
@@ -429,7 +611,7 @@ async function main() {
 
   if (failures === 0) {
     const suffix = warnings ? ` (${warnings} warning${warnings === 1 ? '' : 's'})` : '';
-    console.log(`  AirChat looks good${suffix}. Start it with:  npm start`);
+    console.log(`  AirChat looks good${suffix}. Start the app with:  npm run app`);
   } else {
     console.log(`  ${failures} problem${failures === 1 ? '' : 's'} found. Fix the \u2717 items above.`);
   }

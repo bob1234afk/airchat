@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#08090d" />
+    <title>AirChat — one conversation, every network</title>
+    <meta
+      name="description"
+      content="A messenger that runs on your own computer and mirrors each chat to iMessage, SMS or Telegram. End-to-end encrypted when it stays inside AirChat. No account, no server bill."
+    />
+    <link rel="icon" href="icon.png" />
+    <link rel="apple-touch-icon" href="icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="glow" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href=".">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="20" height="20">
+            <path d="M9 12.5h14M9 18h9" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none" />
+          </svg>
+        </span>
+        <span class="brand-name">AirChat</span>
+      </a>
+      <nav class="topnav">
+        <a href="#download">Download</a>
+        <a href="#how">How it works</a>
+        <a href="#privacy">Privacy</a>
+        <a href="#source">Run from source</a>
+        <a class="topnav-cta" href="https://github.com/bob1234afk/airchat">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Runs on your computer, not somebody's cloud</p>
+        <h1>One conversation.<br />Every network your friends are on.</h1>
+        <p class="lede">
+          You type in AirChat. Your friend gets it <em>on their phone</em> — as an iMessage, a text, or a
+          Telegram message — and in AirChat if they open your link. One thread, several networks, nothing to
+          install from an app store.
+        </p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#download">Get AirChat</a>
+          <a class="btn btn-quiet" href="https://github.com/bob1234afk/airchat">Read the source</a>
+        </div>
+        <ul class="facts">
+          <li><strong>No account.</strong> Nothing to sign up for, no server bill.</li>
+          <li><strong>No dependency tree.</strong> <code>git clone</code>, then <code>node server/index.js</code>.</li>
+          <li><strong>Your data is one file.</strong> <code>data/airchat.json</code>, on your disk, readable by you.</li>
+        </ul>
+      </section>
+
+      <section class="board" aria-label="Where a message can go">
+        <div class="board-row">
+          <span class="chip chip-airchat"><i></i>AirChat link</span>
+          <span class="board-text">Free. Your friend opens a link and replies — nothing to install.</span>
+        </div>
+        <div class="board-row">
+          <span class="chip chip-imessage"><i></i>iMessage</span>
+          <span class="board-text">Real blue bubbles, through BlueBubbles on a Mac that stays awake.</span>
+        </div>
+        <div class="board-row">
+          <span class="chip chip-sms"><i></i>SMS</span>
+          <span class="board-text">Any phone, including iPhones — green bubbles, in the Messages app.</span>
+        </div>
+        <div class="board-row">
+          <span class="chip chip-telegram"><i></i>Telegram</span>
+          <span class="board-text">Free and unlimited, via a bot you make in a minute with @BotFather.</span>
+        </div>
+      </section>
+
+      <section id="download" class="section">
+        <h2>Download</h2>
+        <p class="section-sub">
+          Every build is made from the sources in the repository by the scripts next to it. Two of the formats
+          have a catch, and both catches are written out below rather than discovered later.
+        </p>
+
+        <div class="cards">
+          <article class="card">
+            <h3>Windows — installer</h3>
+            <p class="card-body">
+              324 KB, self-extracting, no admin rights. It unpacks to
+              <code>%LOCALAPPDATA%\AirChat</code>, checks that Node.js is present, puts a shortcut on your
+              Desktop and starts it.
+            </p>
+            <p class="card-note">Wants Node.js 18+. Need a real app window instead of a browser tab? The
+              Electron build below is that.</p>
+            <a class="btn btn-primary btn-block" href="https://github.com/bob1234afk/airchat/releases/download/v0.1.0/AirChat-Setup-0.1.0.exe">
+              AirChat-Setup-0.1.0.exe
+            </a>
+          </article>
+
+          <article class="card">
+            <h3>Windows — Electron app</h3>
+            <p class="card-body">
+              106 MB, a proper desktop window with its own icon and no browser chrome, because it carries a
+              whole Chromium inside. Installs per user, no admin rights.
+            </p>
+            <p class="card-note">
+              Too big to sit in a git repository, so it is attached to the release rather than committed.
+            </p>
+            <a class="btn btn-quiet btn-block" href="https://github.com/bob1234afk/airchat/releases/download/v0.1.0/AirChat-Setup-0.1.0-electron.exe">
+              AirChat-Setup-0.1.0-electron.exe
+            </a>
+          </article>
+
+          <article class="card">
+            <h3>macOS</h3>
+            <p class="card-body">
+              <code>AirChat.app</code>, zipped with its executable bit intact, plus a
+              <code>make-dmg.command</code> that builds a real <code>.dmg</code> on any Mac.
+            </p>
+            <p class="card-note">
+              Unsigned, so the first launch needs right-click → Open. No DMG is committed because Apple's
+              disk-image format can only be written on macOS by <code>hdiutil</code>.
+            </p>
+            <a class="btn btn-primary btn-block" href="https://github.com/bob1234afk/airchat/releases/download/v0.1.0/AirChat-0.1.0-mac.zip">
+              AirChat-0.1.0-mac.zip
+            </a>
+          </article>
+
+          <article class="card card-warn">
+            <h3>iPhone / iPad — needs signing</h3>
+            <p class="card-body">
+              <code>AirChat-0.1.0-unsigned.ipa</code> is the real packaging shape: correct
+              <code>Info.plist</code>, real icons, the real interface, and a placeholder where the compiled
+              program belongs.
+            </p>
+            <p class="card-note">
+              <strong>It will not install as it stands.</strong> An installable IPA needs Apple's compiler and
+              a signing identity, both of which require macOS. The file exists so the signing step has
+              everything except those two things, and <code>START-HERE.md</code> inside it gives the exact
+              commands.
+            </p>
+            <a class="btn btn-quiet btn-block" href="https://github.com/bob1234afk/airchat/releases/download/v0.1.0/AirChat-0.1.0-unsigned.ipa">
+              AirChat-0.1.0-unsigned.ipa
+            </a>
+            <p class="fine">
+              Every download on this page comes from the
+              <a href="https://github.com/bob1234afk/airchat/releases/tag/v0.1.0">v0.1.0 release</a>, which is
+              also where the build for each one can be reproduced.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="how" class="section">
+        <h2>How it works</h2>
+        <div class="split">
+          <div>
+            <p>
+              One Node process on your machine serves the interface, keeps the message store on disk, and
+              pushes updates to every open browser over a WebSocket. Outbound messages go to AirChat always,
+              and additionally through whichever channel the thread is pointed at; inbound messages from
+              those networks land in the same thread.
+            </p>
+            <p>
+              Adding a network means writing one file with a <code>send()</code>, a
+              <code>configured()</code> and a <code>describe()</code>. Nothing else in the app changes.
+            </p>
+          </div>
+          <pre class="tree"><code>server/
+  index.js      HTTP API, WebSocket hub, webhooks, invites
+  ws.js         a WebSocket server with no dependencies
+  store.js      all data, one JSON file, written atomically
+  router.js     one send -&gt; AirChat + the thread's mirror
+  adapters/     mock, bluebubbles, twilio, telegram
+ui/
+  app.js        the whole interface, no build step
+  crypto.js     end-to-end encryption, in the browser</code></pre>
+        </div>
+      </section>
+
+      <section id="privacy" class="section">
+        <h2>What is and is not protected</h2>
+        <p class="section-sub">
+          A chat that stays inside AirChat is end-to-end encrypted with AES-GCM: the key is made in the
+          browser and travels in the part of the invite link after the <code>#</code>, which browsers never
+          send to a server. The server, the file on disk, and Cloudflare only ever hold cipher text.
+        </p>
+        <div class="two-col">
+          <div class="panel panel-good">
+            <h3>Protected</h3>
+            <ul>
+              <li>The text of messages in AirChat-only chats.</li>
+              <li>The key: it never touches the server or the disk.</li>
+              <li>A message altered in transit, or replayed into another chat — refused.</li>
+            </ul>
+          </div>
+          <div class="panel panel-bad">
+            <h3>Not protected</h3>
+            <ul>
+              <li>Anything sent by iMessage, SMS or Telegram. A phone network has to read what it carries.</li>
+              <li>Metadata: what chats exist, who wrote when, how long each locked message is.</li>
+              <li>A key you lose, or a device somebody else is inside.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="source" class="section">
+        <h2>Run it from source</h2>
+        <p class="section-sub">The whole app is the working copy. Nothing is compiled to start it.</p>
+        <pre class="code"><code>git clone https://github.com/bob1234afk/airchat
+cd airchat
+npm start          # opens http://localhost:4000
+npm run doctor     # checks the whole install, including the encryption
+
+npm run build:sfx  # Windows .exe installer
+npm run build:mac  # macOS .app (zipped)
+npm run build:ipa  # unsigned iOS payload, ready to sign</code></pre>
+        <p class="fine">
+          To reach a friend away from home, start it with <code>Start AirChat + Public Link.bat</code> or
+          <code>node tools/tunnel.js</code>: a free Cloudflare Quick Tunnel, no account, no domain. The
+          address changes every run and dies with the window, and AirChat says so rather than handing out a
+          link that cannot resolve.
+        </p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>
+        AirChat is not affiliated with Apple, Cloudflare, Twilio or Telegram. iMessage has no public API:
+        blue bubbles require Apple hardware in the loop, which is a limit of Apple's, not of this project.
+      </p>
+      <p class="foot-links">
+        <a href="https://github.com/bob1234afk/airchat">github.com/bob1234afk/airchat</a>
+        <span>·</span>
+        <a href="https://github.com/bob1234afk/airchat/issues">Issues</a>
+      </p>
+    </footer>
+  </body>
+</html>

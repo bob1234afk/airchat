@@ -1368,6 +1368,36 @@ code {
   color: var(--text);
 }
 
+/* The friend code: the one thing in this window meant to be read out loud. */
+.code-box {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin: 6px 0 2px;
+}
+
+.code-box .code-input {
+  flex: 1;
+  min-width: 0;
+  height: 58px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.34em;
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+  color: var(--text);
+}
+
+.code-box .code-input:focus {
+  border-color: var(--accent, #6c5ce7);
+}
+
 .status-dot {
   width: 7px;
   height: 7px;

@@ -4,52 +4,35 @@
  * AirChat's public link - free, and with no account of any kind.
  *
  * Cloudflare's Quick Tunnels give your laptop a public HTTPS address without an
- * account, a domain, or opening a port on your router. This script ties it
- * together:
+ * account, a domain, or opening a port on your router. This script is the
+ * terminal route to one:
  *
- *   1. starts the tunnel and waits for the trycloudflare.com URL
- *   2. saves that URL into config.json as `publicUrl`, so the invite links
- *      AirChat hands out actually work from outside your house
- *   3. starts the server (which is why step 2 has to come first - the server
+ *   1. make sure this copy can have the port (stop leftovers, or explain)
+ *   2. open the tunnel and record its address in config.json
+ *   3. start the server (which is why step 2 has to come first - the server
  *      reads publicUrl once, at startup)
- *   4. prints the exact link to send each friend
+ *   4. print the exact link to send each friend, and ask the internet whether it
+ *      really answers
+ *
+ * The tunnel itself lives in server/tunnel.js, because the desktop app needs the
+ * same thing without a terminal around it. What stays here is the part that only
+ * makes sense from a command line: the port preflight, the printed summary, and
+ * starting the server as a child process.
  *
  * Quick tunnel URLs are random and change every time this runs, which is the
  * trade for not needing an account. Re-run it and send the new link.
  */
 
 const { spawn, spawnSync } = require('child_process');
-const fs = require('fs');
 const https = require('https');
 const net = require('net');
 const path = require('path');
 
+const { Tunnel, readJson } = require('../server/tunnel');
+
 const ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = path.join(ROOT, 'config.json');
 const DB_PATH = path.join(ROOT, 'data', 'airchat.json');
-
-/**
- * Prefer a cloudflared dropped next to this project.
- *
- * Installing the tunnel should be "download one file" for anyone who would
- * rather not use a package manager, so a cloudflared.exe in the AirChat folder
- * wins over whatever happens to be on PATH.
- */
-function findCloudflared() {
-  const local = path.join(ROOT, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
-  if (fs.existsSync(local)) return local;
-  return 'cloudflared';
-}
-
-function readJson(file) {
-  try {
-    if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (err) {
-    console.error(`  Could not read ${path.relative(ROOT, file)}: ${err.message}`);
-    return null;
-  }
-}
 
 const config = readJson(CONFIG_PATH) || {};
 const port = Number(config.port) || 4000;
@@ -62,23 +45,7 @@ const NO_BROWSER = process.argv.includes('--no-browser');
 
 let tunnel = null;
 let server = null;
-let announced = false;
-let output = '';
-
-/** The address currently advertised in config.json, or null when there is none. */
-let livePublicUrl = null;
-let heartbeat = null;
-/** A failed write is reported once per streak, not every 20 seconds. */
-let writeTrouble = false;
-
-/**
- * How often the link's proof of life is refreshed while the tunnel is up.
- *
- * server/config.js refuses to hand out a public link whose `publicUrlAt` stamp
- * is older than a few minutes (PUBLIC_URL_MAX_AGE_MS), so this interval has to
- * be comfortably shorter than that.
- */
-const HEARTBEAT_MS = 20000;
+const watchers = [];
 
 /* ------------------------------------------------------------------ *
  * 0. Make sure this copy can actually take the port
@@ -185,155 +152,63 @@ function explainPortBusy() {
  * 1. The tunnel
  * ------------------------------------------------------------------ */
 
-function startTunnel() {
+async function startTunnel() {
   console.log('');
   console.log('  AirChat  ·  public link');
   console.log('');
   console.log('  Opening a free Cloudflare Quick Tunnel (no account, no signup)...');
 
-  const binary = findCloudflared();
-  if (binary !== 'cloudflared') {
-    console.log(`  Using the cloudflared in this folder: ${path.basename(binary)}`);
+  tunnel = new Tunnel({ root: ROOT, port, configPath: CONFIG_PATH });
+
+  if (tunnel.binary !== 'cloudflared') {
+    console.log(`  Using the cloudflared in this folder: ${path.basename(tunnel.binary)}`);
   }
 
-  try {
-    tunnel = spawn(binary, ['tunnel', '--url', `http://localhost:${port}`, '--no-autoupdate'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (err) {
-    explainMissingTunnel(err.message);
+  tunnel.on('log', (text) => {
+    // Nothing of cloudflared's own chatter is worth showing; only problems are,
+    // and those arrive through the exit and error paths below.
+    if (/\berr\b|error|failed/i.test(text)) process.stdout.write(`  ${text.trim()}\n`);
+  });
+
+  tunnel.on('exit', (code, wasLive) => {
+    if (wasLive) {
+      console.log(`\n  The public link closed (cloudflared exit ${code}). Re-run to get a new one.`);
+      console.log('  The address has been removed from config.json, so AirChat will not');
+      console.log('  hand a friend a link that no longer works.');
+      return;
+    }
+
+    console.log(`  cloudflared stopped before it produced a link (exit ${code}).`);
+    startServer(null);
+  });
+
+  const stillWaiting = setTimeout(() => {
+    if (!tunnel.url) console.log('  Still waiting for cloudflared... (first run can take ~20 seconds)');
+  }, 20000);
+  if (typeof stillWaiting.unref === 'function') stillWaiting.unref();
+  watchers.push(stillWaiting);
+
+  const result = await tunnel.start();
+  clearTimeout(stillWaiting);
+
+  if (!result.ok) {
+    if (/not installed/i.test(result.detail)) explainMissingTunnel();
+    else {
+      console.error(`  ${result.detail}`);
+      startServer(null);
+    }
     return;
   }
 
-  tunnel.stdout.on('data', (chunk) => watch(chunk));
-  tunnel.stderr.on('data', (chunk) => watch(chunk));
+  console.log(`  Public address  ${result.url}`);
+  console.log('  Saved it to config.json as "publicUrl".');
+  console.log('  This address dies with this window: closing it, or pulling the plug,');
+  console.log('  ends the link. Friends then need a fresh one - run this again.');
 
-  tunnel.on('error', (err) => {
-    // Once the link exists the server is already on its way up; a later tunnel
-    // hiccup must not start a second copy of it.
-    if (announced) {
-      console.error(`  cloudflared reported a problem: ${err.message}`);
-      return;
-    }
-
-    if (err.code === 'ENOENT') explainMissingTunnel(null);
-    else {
-      console.error(`  Could not start cloudflared: ${err.message}`);
-      startServer(null);
-    }
-  });
-
-  tunnel.on('exit', (code) => {
-    if (!announced) {
-      console.error(`  cloudflared stopped before it produced a link (exit ${code}).`);
-      startServer(null);
-      return;
-    }
-    console.log(`\n  The public link closed (cloudflared exit ${code}). Re-run to get a new one.`);
-    clearPublicUrl();
-  });
-
-  setTimeout(() => {
-    if (!announced) {
-      console.log('  Still waiting for cloudflared... (first run can take ~20 seconds)');
-    }
-  }, 20000);
+  startServer(result.url);
 }
 
-function watch(chunk) {
-  output += chunk.toString();
-
-  if (announced) return;
-
-  const match = output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-  if (!match) return;
-
-  announced = true;
-  onTunnelReady(match[0].replace(/\/+$/, ''));
-}
-
-function onTunnelReady(base) {
-  console.log(`  Public address  ${base}`);
-
-  if (savePublicUrl(base)) {
-    console.log('  Saved it to config.json as "publicUrl".');
-    console.log('  This address dies with this window: closing it, or pulling the plug,');
-    console.log('  ends the link. Friends then need a fresh one - run this again.');
-    startHeartbeat();
-  } else {
-    console.error('  Invite links will only work on your Wi-Fi until you set it by hand.');
-  }
-
-  startServer(base);
-}
-
-/**
- * Save - or, with an empty base, clear - the public link in config.json.
- *
- * A Quick Tunnel address only exists while this process does. Left behind in
- * config.json it becomes a link that AirChat happily hands to a friend and that
- * their browser answers with "server IP address could not be found", which is
- * how a dead app looks from the outside. So the link is written with the time
- * it was last known good (`publicUrlAt`), refreshed while the tunnel runs, and
- * removed when it stops.
- *
- * The file is re-read before writing rather than saving the startup snapshot,
- * so the token the server minted meanwhile - or an edit made while running - is
- * not overwritten.
- */
-function savePublicUrl(base, quiet) {
-  try {
-    const current = readJson(CONFIG_PATH) || config;
-    const next = Object.assign({}, current, {
-      publicUrl: base,
-      publicUrlAt: base ? Date.now() : 0,
-    });
-
-    fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-    livePublicUrl = base;
-    writeTrouble = false;
-    return true;
-  } catch (err) {
-    if (!quiet || !writeTrouble) {
-      console.error(`  Could not save publicUrl to config.json: ${err.message}`);
-      if (!quiet) {
-        console.error('  Invite links will only work on your Wi-Fi until you set it by hand.');
-      }
-      writeTrouble = true;
-    }
-    return false;
-  }
-}
-
-function startHeartbeat() {
-  if (heartbeat) return;
-
-  heartbeat = setInterval(() => {
-    if (livePublicUrl) savePublicUrl(livePublicUrl, true);
-  }, HEARTBEAT_MS);
-
-  // A timer must never be the reason this window refuses to close.
-  if (typeof heartbeat.unref === 'function') heartbeat.unref();
-}
-
-/** Stop advertising an address once it can no longer work. */
-function clearPublicUrl() {
-  if (heartbeat) {
-    clearInterval(heartbeat);
-    heartbeat = null;
-  }
-
-  if (!livePublicUrl) return;
-  livePublicUrl = null;
-
-  if (savePublicUrl('')) {
-    console.log('  Removed the expired public link from config.json, so AirChat will');
-    console.log('  not hand out an address that no longer exists.');
-  }
-}
-
-function explainMissingTunnel(detail) {
-  if (detail) console.error(`  cloudflared did not start: ${detail}`);
+function explainMissingTunnel() {
   console.log('');
   console.log('  cloudflared is not installed, so AirChat will stay on your Wi-Fi only.');
   console.log('  To get a free public link (no account needed):');
@@ -492,12 +367,17 @@ function stop() {
   if (stopping) return;
   stopping = true;
 
-  clearPublicUrl();
+  for (const timer of watchers) clearTimeout(timer);
+  watchers.length = 0;
 
-  for (const child of [server, tunnel]) {
-    if (!child || child.killed) continue;
+  // Withdraws the address as well as killing the process, so config.json cannot
+  // be left holding a link that no longer resolves.
+  if (tunnel) tunnel.stop();
+
+  // The tunnel killed its own child above; only the server is left here.
+  if (server && !server.killed) {
     try {
-      child.kill();
+      server.kill();
     } catch (err) {
       // Already gone; nothing to clean up.
     }

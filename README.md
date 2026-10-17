@@ -29,6 +29,42 @@ messages live in one JSON file you own.
 
 ---
 
+## The app is the way in now
+
+AirChat is a desktop app. You install it, it opens a window, and it does the
+things the browser version could only pretend to do.
+
+- **It opens its own public link.** Every launch starts a free Cloudflare tunnel,
+  so invites work from anywhere with no terminal and no second launcher. A link
+  from a previous run is forgotten on startup, because a quick tunnel address
+  dies with the process that owned it.
+- **Encryption is the same code, now in a secure context.** WebCrypto is
+  available to the window itself, so locking a message before it leaves the page
+  works exactly as it did at `https://` and no redirect is needed.
+- **Notifications actually arrive.** The app grants its own window permission and
+  shows a real OS notification, with the unread count in the title.
+- **Your files live outside the install folder.** `%APPDATA%\AirChat\home` on
+  Windows, `~/Library/Application Support/AirChat/home` on a Mac — so updating or
+  reinstalling the app cannot take your chats with it. An existing
+  `config.json` and `data/airchat.json` next to the code are copied across once.
+- **No service worker.** The app never caches its own interface underneath
+  itself, so a new version is what you see the next time you open it.
+
+Your **friend** still opens a link in their browser. That is what a link is, and
+it stays the free way to reach a phone with no app store involved. What changed
+is the host: the app is the thing you run.
+
+```bat
+AirChat-Setup-0.1.0-electron.exe
+```
+
+From a checkout instead: `npm install` once, then `npm run app`. To have the
+machine prove the app really works — encryption round-trip, the lock on disk,
+notifications, and the public link answering from the internet — run
+`npm run check:app` with AirChat closed.
+
+---
+
 ## The free plan: no money, no accounts
 
 Everything in this section needs nothing from anyone — no card, no signup, no
@@ -205,35 +241,47 @@ $39/month, which is aimed at businesses rather than two friends.
    needs version 18 or newer. Nothing else is required — AirChat has **zero npm
    dependencies**.
 
-2. **Start it.** Double-click **`Start AirChat.bat`**, or in a terminal:
+2. **Start the app.** Double-click **`AirChat-Setup-0.1.0-electron.exe`**, or from
+   a checkout:
 
    ```bat
    cd AirChat
-   npm start
+   npm install
+   npm run app
    ```
 
-   Your browser opens at <http://localhost:4000> and already has two demo chats
-   in it so you can see how it works.
-
-   To let a friend reach it from outside your house, use
-   **`Start AirChat + Public Link.bat`** instead — see **The free plan** above.
+   A real window opens with two demo chats in it, and the public link is already
+   running — see **The free plan** above.
 
 3. **Check it is healthy** if anything looks off:
 
    ```bat
    npm run doctor
+   npm run check:app
    ```
 
-   This parses every file, loads every server module, checks that the interface
-   and the code agree on element names, and confirms the port is free.
+   `doctor` parses every file, loads every server module, checks that the
+   interface and the code agree on element names, and confirms the port is free.
+   `check:app` drives the real Electron window and proves what only an app can do:
+   a secure context with WebCrypto, a message locked before it is sent and locked
+   on disk, keys surviving a reload, notifications, and the public link answering
+   from the internet. Close AirChat first — it refuses to test a copy that is
+   already running.
+
+   The server on its own still works, for a machine with no Electron:
+   `npm start` opens the same interface at <http://localhost:4000>, and
+   `Start AirChat + Public Link.bat` adds the tunnel by hand.
 
 ### Keep it out of the way
 
-Double-click **`Start AirChat in Tray.bat`**. It starts the server *and* the
-public link, hands them to Windows, and closes itself: AirChat then has no window
-at all — just an icon next to the clock. Closing that launcher window, or any
-window, stops nothing. Double-clicking it again replaces the running copy
-instead of fighting it for the port.
+If you run the server on its own rather than the app, double-click
+**`Start AirChat in Tray.bat`**. It starts the server *and* the public link, hands
+them to Windows, and closes itself: AirChat then has no window at all — just an
+icon next to the clock. Closing that launcher window, or any window, stops
+nothing. Double-clicking it again replaces the running copy instead of fighting
+it for the port.
+
+The app needs none of this: it is a window that opens its own link.
 
 It deliberately does **not** open a browser tab: the tray icon is the way in.
 Double-click the icon to open AirChat; right-click it to copy the friend links,
@@ -262,67 +310,76 @@ Then double-click it like any other app. `npm run doctor` works on macOS too.
 
 ### Want it as a real app window?
 
-```bat
-npm install
-Start AirChat Window.bat
-```
-
-That installs Electron (~100 MB, one time) and gives you a proper desktop window
-with no browser chrome. AirChat works perfectly in a browser without it.
+The Electron app *is* AirChat now: `AirChat-Setup-0.1.0-electron.exe`, or
+`npm install && npm run app` in a checkout. It opens its own public link, asks
+for notifications once, and keeps its files in its own folder.
 
 ---
 
 ## Talking to your friend
 
-### The same Wi-Fi (30 seconds, free)
+### A code, not a link
 
-Click **Invite** in a chat. It gives you a link like
-`http://192.168.1.20:4000/?guest=…`. Text that link to your friend. They open it
-on their phone and they are in that one conversation — nothing to install.
+Click **Invite** in a chat and you get six characters, like `E2LEXR`. Send them
+those six characters however you like — they are short enough to read out over
+the phone. Your friend opens
+
+<https://site-7f015d99cb0e43f98814f3a7512c55bb.freebuff.page>
+
+and types the code. They land in that one conversation, on their phone, with
+nothing to install and no account.
+
+A code cannot carry an address, so a small directory does that one job: your app
+registers `code → where it is right now`, and the page asks the directory and
+forwards them. The directory holds nothing but the code, the address, an expiry,
+and a secret that proves the code is yours — no names, no messages, and it will
+only ever forward someone to a `trycloudflare.com` address.
+
+The interesting part is what a code *does* keep: the chat key. The six characters
+resolve to your invite **including** the part after `#`, which the browser never
+sends to any server. So the key reaches your friend and never reaches the
+directory.
+
+**A code works while AirChat is open.** Close it and the directory has nothing to
+forward to; the page says the code is not active rather than showing a browser
+error. The next time AirChat starts it takes a new address, and the codes you
+already handed out are moved to it — the same six characters keep working, for up
+to twelve hours.
+
+Run it yourself instead of using the hosted directory:
+
+```bat
+directory\       a small Cloudflare Worker + D1 table (npm run check:codes-service)
+npm run check:codes   proves the app hands out a code that resolves back to its own invite
+```
+
+Point the app at your own copy with `AIRCHAT_CODES_URL`, or set
+`friendCodes.directory` in `config.json`.
+
+### The same Wi-Fi
+
+Codes need the public link (below). With no internet, Invite still offers the
+Wi-Fi address — `http://192.168.1.20:4000/?guest=…` — which works on your own
+network only.
 
 Browsers only allow encryption on a secure address: `https://`, or `localhost`.
-A plain `http://192.168.x.x` page therefore cannot lock a single message. When
-the public link is running, AirChat quietly forwards a Wi-Fi visitor to it —
-the invite and the `#k=…` key travel with them — so the Wi-Fi link still ends up
-in the encrypted chat. With no public link there is nowhere safe to go, and
-AirChat says so instead of appearing to work: read that chat over `https://`.
+A plain `http://192.168.x.x` page therefore cannot lock a single message, so a
+Wi-Fi visitor is quietly forwarded to the public address when there is one, and
+AirChat says so plainly when there is not.
 
 ### From anywhere (free, still your laptop)
 
-Your laptop is not reachable from the internet by default. A tunnel fixes that
-for free and with no account:
+Your laptop is not reachable from the internet by default. The app opens the
+tunnel itself on every launch; if you are running the server by hand instead:
 
 1. Once only: **`Install Cloudflared (one time).bat`**
 2. Every time: **`Start AirChat + Public Link.bat`** (or the tray launcher)
 
-The launcher opens a Cloudflare Quick Tunnel, saves the `https://something.trycloudflare.com`
-address as `publicUrl`, and prints the link to send each friend. Invite links will
-then work from anywhere. Your laptop still does all the work.
-
-**That address lives exactly as long as that window does.** Close the window,
-stop it from the tray, or restart the PC, and the tunnel is gone — a friend who
-taps the old link sees `ERR_NAME_NOT_RESOLVED` / "server IP address could not be
-found". Nothing is broken and nothing was hacked; the address simply stopped
-existing. Start the launcher again and send the new link.
-
-AirChat knows this, so it will not pretend otherwise: while the tunnel runs it
-refreshes a "this link is still alive" stamp every 20 seconds, clears the link
-when it stops, and refuses to hand out one whose stamp has gone quiet. The Invite
-window says the public link expired instead of offering one that cannot open.
-The same stamp lets a running AirChat pick up an address that appears after it
-started, so starting the tunnel second no longer leaves Invite handing out a
-Wi-Fi-only link for the rest of the session.
-
-The launcher also looks after the two things that used to send friends to a dead
-link. If an older AirChat still holds the port, it stops that copy *before*
-opening a tunnel, so no address is ever saved without a server behind it. Then,
-after AirChat is up, it asks the internet whether the new address answers and
-says so in the window — `the link answers` means that is the address to send.
-
-**Copy the link from Invite, not from the terminal window.** The launcher can
-print the address, but the key that unlocks an encrypted chat only exists in your
-browser, so a link printed by the terminal opens the chat with nothing to unlock
-it. The Invite window is the copy that carries the key.
+Either way a free Cloudflare Quick Tunnel is what makes a code reachable, and
+that address lives exactly as long as the process behind it. AirChat knows this:
+it forgets the previous run's address at startup, refreshes a "still alive" stamp
+every 20 seconds, withdraws an address whose stamp has gone quiet, and never
+hands one out that cannot open.
 
 ---
 
@@ -439,6 +496,52 @@ perspective, so they can reply in AirChat and it lands next to everything else.
 
 ---
 
+## Downloads and packaging
+
+Everything in `artifacts/` is built from this source tree by the scripts in
+`packaging/`, on a normal Windows PC with nothing installed but Node. No CI, no
+Docker, no build server.
+
+| Artifact | What it is | Built by |
+| --- | --- | --- |
+| `AirChat-Setup-0.1.0-electron.exe` | **The app.** 106 MB Electron build: a real window, its own icon, its own public link, notifications, and its data kept in `%APPDATA%\AirChat\home`. Attached to the GitHub release rather than committed, because it is over GitHub's 100 MB file limit. | `npm run build:win` |
+| `AirChat-Setup-0.1.0.exe` | 324 KB self-extracting installer for a PC without Electron. Unpacks to `%LOCALAPPDATA%\AirChat`, checks for Node, adds a Desktop shortcut, starts it. No admin rights. | `npm run build:sfx` |
+| `AirChat-0.1.0-mac.zip` | `AirChat.app`, zipped with its executable bit intact. Data lives in `~/Library/Application Support/AirChat`, never inside the bundle. | `npm run build:mac` |
+| `AirChat-0.1.0-unsigned.ipa` | An **unsigned, uncompiled** iOS payload: real `Info.plist`, real icons, the real interface, and a placeholder where the binary belongs. It will not install until it is compiled and signed on a Mac. | `npm run build:ipa` |
+
+Three things are worth being straight about, because they are limits of the
+platforms rather than of this project:
+
+- **There is no `.dmg` in the repository.** A DMG is Apple's disk-image format
+  and only Apple's `hdiutil` writes one, which means only a Mac can produce it.
+  What ships instead is the working `.app` plus `packaging/mac/make-dmg.command`,
+  which builds the real disk image in one step on any Mac.
+- **The `.ipa` cannot be made installable here.** iOS runs nothing unsigned, and
+  nothing at all without a Mach-O binary from Apple's compiler. The file in
+  `artifacts/` is the packaging shape, so the signing step has everything except
+  the two things only macOS can give it; `START-HERE.md` inside it has the
+  commands.
+- **None of the installers are code-signed.** Windows SmartScreen and macOS
+  Gatekeeper will both want a right-click → Open the first time. Signing needs a
+  paid certificate from each vendor.
+
+The landing page is plain HTML and CSS in `site/`. `node
+packaging/site/build-site.js` stages it (and checks that every link in it
+resolves to a file that exists), and the staged folder is what gets uploaded.
+
+To build every artifact at once:
+
+```bat
+npm install
+npm run build:all
+```
+
+`npm install` pulls Electron once, for the optional desktop window. AirChat
+itself still has **zero runtime dependencies** — nothing in `server/` or `ui/`
+imports anything.
+
+---
+
 ## How it works
 
 ```
@@ -461,8 +564,19 @@ ui/
   sw.js                            offline shell + notification handling
 tools/
   tunnel.js     free public link, then starts the server
+  zip.js        a zip writer, so the macOS and iOS artifacts keep their modes
+  make-icon.js  turns the drawn icon into the .ico and .png the installers read
 desktop/
   main.js       optional Electron window
+packaging/
+  mac/          builds AirChat.app, and builds a real .dmg on a Mac
+  ios/          builds the unsigned iOS payload to sign
+  windows/      builds the .exe installer with IExpress, which Windows has
+  site/         stages the landing page for upload
+site/
+  index.html, styles.css, icon.png  the landing page, no build step
+artifacts/
+  the built downloads, straight from the scripts above
 ```
 
 The app icons are worth a note: a phone home screen needs a PNG, but instead of
@@ -537,9 +651,11 @@ permits web notifications for home-screen apps. Check **Settings → Alerts** sh
 
 **The link stopped working / `ERR_NAME_NOT_RESOLVED`**
 Quick tunnel addresses are random and change every run, and stop existing when
-the window that opened them closes — that is the price of needing no account.
-Re-run `Start AirChat + Public Link.bat` and send the new link. A permanent
-address needs one free Cloudflare account (see above).
+the process that opened them closes — that is the price of needing no account.
+The app opens a fresh one at every launch and forgets the old one, so restart it
+and send the new link. Running the server by hand instead? Re-run
+`Start AirChat + Public Link.bat`. A permanent address needs one free Cloudflare
+account (see above).
 
 If the launcher reports **"Port 4000 is already in use"**, AirChat is already
 running somewhere else — probably a window you forgot about. That second copy
@@ -547,7 +663,10 @@ briefly got its own public address and then died, so use the copy that is still
 running (or close it and start one fresh). Two copies cannot share a link.
 
 **I want to start over**
-Close AirChat and delete `data/airchat.json`. You will get the demo chats back.
+Close AirChat and delete `%APPDATA%\AirChat\home\data\airchat.json`
+(`~/Library/Application Support/AirChat/home/data/airchat.json` on a Mac). You
+will get the demo chats back. Running the server from a folder instead? It is
+`data/airchat.json` next to the code.
 
 ---
 

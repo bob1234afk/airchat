@@ -10,6 +10,19 @@
  *
  * On first run AirChat writes a config.json so there is something obvious to
  * edit, and generates a share token that gets baked into friend invite links.
+ *
+ * Where that file lives depends on how AirChat was started. Run from a checkout,
+ * it sits next to the code, which is what you want when the code is yours to
+ * edit. Run as an installed app, the code lives somewhere the operating system
+ * owns and replaces on every update - writing messages there would lose them on
+ * the next update, so the desktop app points `AIRCHAT_HOME` at its own data
+ * folder instead and everything user-owned goes there:
+ *
+ *   AIRCHAT_HOME/config.json       your settings and any channel passwords
+ *   AIRCHAT_HOME/data/airchat.json your messages
+ *
+ * Only those two are moved. ROOT still means "the code", so the interface and
+ * the tools are read from wherever the app was installed.
  */
 
 const fs = require('fs');
@@ -17,8 +30,17 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '..');
-const CONFIG_PATH = path.join(ROOT, 'config.json');
-const DATA_DIR = path.join(ROOT, 'data');
+
+/**
+ * Where the user's own files go: the folder the code lives in, unless the
+ * desktop app (or anyone else) has said otherwise.
+ */
+const HOME = process.env.AIRCHAT_HOME
+  ? path.resolve(process.env.AIRCHAT_HOME)
+  : ROOT;
+
+const CONFIG_PATH = path.join(HOME, 'config.json');
+const DATA_DIR = path.join(HOME, 'data');
 const DB_PATH = path.join(DATA_DIR, 'airchat.json');
 
 /**
@@ -53,6 +75,18 @@ const DEFAULTS = {
   twilio: { accountSid: '', authToken: '', fromNumber: '' },
   telegram: { botToken: '' },
   mock: { autoReply: true, latencyMs: 1200 },
+  /**
+   * Where friend codes live.
+   *
+   * A six-character code cannot carry an address, so a small directory turns it
+   * back into "where is that app right now". Point this at your own deployment of
+   * directory/ if you would rather run it yourself; the app works without it and
+   * simply says codes are unavailable.
+   */
+  friendCodes: {
+    directory: 'https://site-7f015d99cb0e43f98814f3a7512c55bb.freebuff.page',
+    minutes: 720,
+  },
   /** Shown in the UI; the real name is a TODO for you to fill in later. */
   appName: 'AirChat',
 };
@@ -123,6 +157,10 @@ function envOverrides() {
   if (pick('TELEGRAM_BOT_TOKEN')) {
     out.telegram = { botToken: pick('TELEGRAM_BOT_TOKEN') };
   }
+
+  // Point friend codes at your own directory, or at a stub during a test.
+  const codesUrl = pick('AIRCHAT_CODES_URL');
+  if (codesUrl) out.friendCodes = { directory: codesUrl.replace(/\/+$/, '') };
 
   return out;
 }
@@ -212,6 +250,7 @@ module.exports = {
   isPublicUrlStale,
   PUBLIC_URL_MAX_AGE_MS,
   ROOT,
+  HOME,
   CONFIG_PATH,
   DATA_DIR,
   DB_PATH,

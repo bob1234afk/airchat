@@ -30,6 +30,7 @@ const {
   parseTwilioWebhook,
 } = require('./adapters');
 const { Router } = require('./router');
+const friendCodes = require('./codes');
 const ws = require('./ws');
 const icons = require('./icons');
 
@@ -482,6 +483,111 @@ function inviteLinks(conversationId) {
   };
 }
 
+/**
+ * A friend code for one chat.
+ *
+ * The code points at the invite address *including* the part after "#", because
+ * that is where the chat key lives: a code that forwarded only the ?guest= part
+ * would drop the friend into a chat they cannot read a word of. Reusing the code
+ * already attached to this invite keeps the six characters a friend was sent
+ * working, even across a restart that changed the address behind them.
+ */
+async function friendCodeFor(conversationId, key) {
+  const directory = (config.friendCodes && config.friendCodes.directory) || '';
+  const minutes = (config.friendCodes && config.friendCodes.minutes) || friendCodes.DEFAULT_MINUTES;
+  const guest = store.createGuestToken(conversationId);
+
+  const cleanKey = String(key || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+  const fragment = cleanKey
+    ? `#k=${encodeURIComponent(cleanKey)}&c=${encodeURIComponent(conversationId)}`
+    : '';
+
+  if (!config.publicUrl) {
+    return {
+      ok: false,
+      reason: 'no public link',
+      detail: 'A code only works while AirChat has a public link, and this copy does not have one.',
+      page: friendCodes.codeHome(directory),
+    };
+  }
+
+  const url = `${config.publicUrl.replace(/\/+$/, '')}/?guest=${guest.token}${fragment}`;
+
+  if (guest.code && guest.codeSecret) {
+    const moved = await friendCodes.refreshCode({
+      directory,
+      code: guest.code,
+      secret: guest.codeSecret,
+      url,
+      minutes,
+    });
+
+    if (moved.ok) {
+      store.setGuestCode(conversationId, { code: guest.code, secret: guest.codeSecret, expiresAt: moved.expiresAt });
+      return {
+        ok: true,
+        code: guest.code,
+        expiresAt: moved.expiresAt,
+        page: friendCodes.codeHome(directory),
+        join: friendCodes.codePage(directory, guest.code),
+        url,
+      };
+    }
+  }
+
+  const made = await friendCodes.requestCode({ directory, url, minutes });
+
+  if (!made.ok) {
+    return {
+      ok: false,
+      reason: 'directory',
+      detail: made.detail,
+      page: friendCodes.codeHome(directory),
+    };
+  }
+
+  store.setGuestCode(conversationId, { code: made.code, secret: made.secret, expiresAt: made.expiresAt });
+
+  return {
+    ok: true,
+    code: made.code,
+    expiresAt: made.expiresAt,
+    page: friendCodes.codeHome(directory),
+    join: friendCodes.codePage(directory, made.code),
+    url,
+  };
+}
+
+/**
+ * Move every code this app handed out to its new address.
+ *
+ * A quick tunnel address is different on every launch, so a code made yesterday
+ * forwards to a host that no longer exists. The codes themselves do not have to
+ * change: the secret kept with each invite is enough to point them somewhere new.
+ */
+async function moveFriendCodes() {
+  if (!config.publicUrl) return;
+
+  const directory = (config.friendCodes && config.friendCodes.directory) || '';
+  const minutes = (config.friendCodes && config.friendCodes.minutes) || friendCodes.DEFAULT_MINUTES;
+
+  for (const guest of store.guestsWithCodes()) {
+    const url = `${config.publicUrl.replace(/\/+$/, '')}/?guest=${guest.token}`;
+    const moved = await friendCodes.refreshCode({
+      directory,
+      code: guest.code,
+      secret: guest.codeSecret,
+      url,
+      minutes,
+    });
+
+    if (moved.ok) {
+      store.setGuestCode(guest.conversationId, { code: guest.code, secret: guest.codeSecret, expiresAt: moved.expiresAt });
+      console.log(`  Friend code   ${guest.code} now points at ${config.publicUrl}`);
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * API
  * ------------------------------------------------------------------ */
@@ -745,7 +851,10 @@ async function handleApi(req, res, url, method, pathname) {
         return;
       }
 
-      sendJson(res, 200, inviteLinks(conversationId));
+      const links = inviteLinks(conversationId);
+      const code = await friendCodeFor(conversationId, body.key);
+
+      sendJson(res, 200, { ...links, code });
       return;
     }
 
@@ -1055,10 +1164,16 @@ function adopt(stored) {
 
   console.log('');
   console.log(`  Public link   ${stored}`);
-  console.log('  Invite links now use it - the https address is the one a friend can open.');
+  console.log('  Friend codes now point at it - that is the address a friend is forwarded to.');
 
   // Browsers already open on this server redraw their Invite window.
   bus.publish({ type: 'reload' });
+
+  // A code from before this launch points at an address that no longer exists,
+  // so it is moved to the new one rather than left to fail quietly.
+  moveFriendCodes().catch((err) => {
+    console.log(`  Friend codes could not be moved to the new address: ${err.message}`);
+  });
 }
 
 function watchPublicUrl() {
