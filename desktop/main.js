@@ -36,6 +36,10 @@ const http = require('http');
 const { spawnSync } = require('child_process');
 const { app, BrowserWindow, Menu, shell, dialog, session } = require('electron');
 
+// One name, so a development run and an installed copy read the same folder
+// instead of quietly being two different AirChats with two sets of chats.
+app.setName('AirChat');
+
 // The window *is* the interface, so do not also pop open a browser tab.
 process.env.AIRCHAT_NO_BROWSER = '1';
 
@@ -63,6 +67,26 @@ process.env.AIRCHAT_HOME = HOME;
 let mainWindow = null;
 let tunnel = null;
 let tunnelUrl = '';
+
+/**
+ * A log the app can be asked about.
+ *
+ * A window that closes by itself leaves nothing behind to look at: no console in
+ * a packaged app, no message, just gone. Every decision this file can take - the
+ * single-instance lock, the server, the window, the tunnel, a crash - is written
+ * here first, so "it keeps closing" can be answered with facts instead of
+ * guesses. `%APPDATA%\AirChat\airchat-app.log`, small and never rotated because
+ * one launch's worth is a few dozen lines.
+ */
+const LOG_PATH = path.join(app.getPath('userData'), 'airchat-app.log');
+
+function log(message) {
+  try {
+    fs.appendFileSync(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
+  } catch (err) {
+    // A log that cannot be written must never be the reason the app fails.
+  }
+}
 
 /** Read the port straight out of config.json so both agree without starting up. */
 function configuredPort() {
@@ -113,10 +137,24 @@ function pinPortForServer() {
 function adoptExistingFiles() {
   fs.mkdirSync(HOME, { recursive: true });
 
+  // Before the app set its own name, a development run said "airchat" while an
+  // installed copy said "AirChat". On Windows those are the same folder; on a Mac
+  // they are not, so chats made in the older one are adopted once rather than
+  // left behind. The copy is skipped when the two are the same place.
+  const legacy = path.join(app.getPath('appData'), 'airchat', 'home');
+  const sameFolder = path.resolve(legacy) === path.resolve(HOME);
+
   const moves = [
+    ...(sameFolder
+      ? []
+      : [
+          { from: path.join(legacy, 'config.json'), to: path.join(HOME, 'config.json') },
+          { from: path.join(legacy, 'data', 'airchat.json'), to: path.join(HOME, 'data', 'airchat.json') },
+        ]),
     { from: path.join(ROOT, 'config.json'), to: path.join(HOME, 'config.json') },
     { from: path.join(ROOT, 'data', 'airchat.json'), to: path.join(HOME, 'data', 'airchat.json') },
   ];
+
 
   for (const { from, to } of moves) {
     try {
@@ -216,10 +254,12 @@ async function startPublicLink() {
       // fresh https address within a couple of seconds, then tells every open
       // window to redraw. The app deliberately does not add a second path for
       // the same thing.
+      log(`public link: ${tunnelUrl}`);
       console.log(`[airchat] public link ready: ${tunnelUrl}`);
       return;
     }
 
+    log(`no public link: ${result.detail}`);
     console.log(`[airchat] no public link: ${result.detail}`);
   } catch (err) {
     console.error(`[airchat] the public link could not start: ${err.message}`);
@@ -281,9 +321,25 @@ function createWindow() {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  log(`window created for ${BASE_URL}`);
+
+  mainWindow.once('ready-to-show', () => {
+    log('window ready; showing it');
+    mainWindow.show();
+  });
   mainWindow.on('closed', () => {
+    log('the window was closed');
     mainWindow = null;
+  });
+
+  // The renderer dying is the one failure that looks exactly like "it closed
+  // itself", so it is recorded rather than left as a blank window.
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    log(`the interface process ended: ${details.reason} (exit ${details.exitCode})`);
+  });
+
+  mainWindow.webContents.on('did-fail-load', (event, code, description, url) => {
+    log(`the interface failed to load: ${description} (${code}) ${url}`);
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -366,24 +422,29 @@ async function boot() {
   await evictStaleInterface();
 
   const alreadyRunning = await pingServer();
+  log(alreadyRunning ? `a server was already answering on ${BASE_URL}` : 'starting the server');
 
   if (!alreadyRunning) {
     try {
       startServer();
     } catch (err) {
-      dialog.showErrorBox('AirChat could not start', err.message);
+      log(`the server could not start: ${err.stack || err.message}`);
+      dialog.showErrorBox('AirChat could not start', `${err.message}\n\nDetails: ${LOG_PATH}`);
       app.quit();
       return;
     }
 
     if (!(await waitForServer(8000))) {
+      log('the server did not answer within 8s; quitting');
       dialog.showErrorBox(
         'AirChat could not start',
-        `Nothing answered on ${BASE_URL} after starting the server.\n\nTry running "node server/index.js" in a terminal to see the error.`
+        `Nothing answered on ${BASE_URL} after starting the server.\n\nDetails: ${LOG_PATH}`
       );
       app.quit();
       return;
     }
+
+    log('the server answered');
   }
 
   createWindow();
@@ -393,16 +454,44 @@ async function boot() {
   startPublicLink();
 }
 
+/** A crash in the main process is worth more than a window that vanishes. */
+process.on('uncaughtException', (err) => {
+  log(`CRASH ${err && err.stack ? err.stack : err}`);
+  dialog.showErrorBox('AirChat stopped', `${err.message}\n\nDetails: ${LOG_PATH}`);
+  app.quit();
+});
+
+process.on('unhandledRejection', (reason) => {
+  log(`UNHANDLED REJECTION ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+log(`start ${VERSION} ${process.platform} ${process.arch} port=${PORT} home=${HOME}`);
+
 if (!app.requestSingleInstanceLock()) {
+  // The usual cause of "it opens and immediately closes": a copy is already
+  // running, so this one steps aside. The one that is running is told to show
+  // its window (see below) rather than leaving the double-click doing nothing.
+  log('another copy holds the single-instance lock; asking it to show its window');
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (!mainWindow) return;
+    log('a second launch was asked to show this window');
+
+    // A running copy with no window - left behind by a failed start - would
+    // otherwise swallow every later double-click in silence.
+    if (!mainWindow) {
+      createWindow();
+      return;
+    }
+
     if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
     mainWindow.focus();
   });
 
   app.whenReady().then(() => {
+    log('ready');
+
     // AirChat draws its own UI, so the default menu bar adds nothing on Windows.
     if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
     grantOwnPermissions();
@@ -414,6 +503,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('window-all-closed', () => {
+    log('the last window closed; quitting');
     app.quit();
   });
 
