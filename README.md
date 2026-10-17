@@ -270,7 +270,7 @@ $39/month, which is aimed at businesses rather than two friends.
 
    The server on its own still works, for a machine with no Electron:
    `npm start` opens the same interface at <http://localhost:4000>, and
-   `Start AirChat + Public Link.bat` adds the tunnel by hand.
+   `node tools/tunnel.js` adds the public link by hand for that headless case.
 
 ### Keep it out of the way
 
@@ -532,9 +532,8 @@ npm install
 npm run build:all
 ```
 
-`npm install` pulls Electron once, for the optional desktop window. AirChat
-itself still has **zero runtime dependencies** — nothing in `server/` or `ui/`
-imports anything.
+`npm install` pulls Electron once, for the app. AirChat itself still has **zero
+runtime dependencies** — nothing in `server/` or `ui/` imports anything.
 
 ---
 
@@ -547,6 +546,7 @@ server/
   store.js      all data, in data/airchat.json, written atomically
   router.js     one send -> AirChat + the thread's mirror channel
   config.js     defaults <- config.json <- environment variables
+  link-status.js whether a friend can reach this copy, as one shared fact
   icons.js      draws the app icons as real PNGs, using only zlib
   adapters/
     mock.js         pretends to deliver, so you can test for free
@@ -559,11 +559,15 @@ ui/
   manifest.webmanifest             makes AirChat installable to a phone
   sw.js                            offline shell + notification handling
 tools/
-  tunnel.js     free public link, then starts the server
+  start-app.cmd the one door every launcher uses: open the app, whatever it is
+  tray.ps1      the icon by the clock when the app runs with no window
+  tunnel.js     the public link on its own, for a server with no Electron
   zip.js        a zip writer, so the macOS and iOS artifacts keep their modes
   make-icon.js  turns the drawn icon into the .ico and .png the installers read
 desktop/
-  main.js       optional Electron window
+  main.js       the app: the window, the server inside it, and its public link
+  starting.html the screen shown for the second before the interface can be
+  preload.js    the little the interface is told about the app it runs in
 packaging/
   mac/          builds AirChat.app, and builds a real .dmg on a Mac
   ios/          builds the unsigned iOS payload to sign
@@ -658,14 +662,9 @@ permits web notifications for home-screen apps. Check **Settings → Alerts** sh
 Quick tunnel addresses are random and change every run, and stop existing when
 the process that opened them closes — that is the price of needing no account.
 The app opens a fresh one at every launch and forgets the old one, so restart it
-and send the new link. Running the server by hand instead? Re-run
-`Start AirChat + Public Link.bat`. A permanent address needs one free Cloudflare
-account (see above).
-
-If the launcher reports **"Port 4000 is already in use"**, AirChat is already
-running somewhere else — probably a window you forgot about. That second copy
-briefly got its own public address and then died, so use the copy that is still
-running (or close it and start one fresh). Two copies cannot share a link.
+and send the new link. Running the server by hand instead? Restart
+`node tools/tunnel.js`. A permanent address needs one free Cloudflare account
+(see above).
 
 **I want to start over**
 Close AirChat and delete `%APPDATA%\AirChat\home\data\airchat.json`
