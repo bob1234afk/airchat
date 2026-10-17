@@ -78,9 +78,23 @@
    * Session
    * ------------------------------------------------------------------ */
 
+  /**
+   * The installed desktop app, or a browser that reached AirChat through a link?
+   *
+   * Both load this same file, and a handful of things are only true in one of
+   * them: a service worker caches the app's own files underneath it, a home
+   * screen install prompt is nonsense for something already installed, and a
+   * plain http:// browser page has to be handed over to the https link because
+   * it has no crypto at all. The app is told by desktop/preload.js, which is the
+   * only place that knows for certain; the query string is a fallback for a
+   * window opened by hand.
+   */
   const params = new URLSearchParams(window.location.search);
   const ownerToken = params.get('token') || '';
   const guestToken = params.get('guest') || '';
+
+  const APP = Boolean(window.airchatApp && window.airchatApp.isApp) || params.get('app') === 'desktop';
+  const APP_VERSION = (window.airchatApp && window.airchatApp.version) || '';
   // Usually decided by the invite in the URL, but the server is authoritative -
   // see applyState, where a remembered cookie can also make us a guest.
   let isGuest = Boolean(guestToken);
@@ -691,7 +705,11 @@
     avatar.textContent = me.initials || '?';
     avatar.style.background = me.color || '#7c5cff';
     $('me-name').textContent = me.name || 'You';
-    $('me-sub').textContent = isGuest ? 'Invited to one chat' : `AirChat · port ${state.server.port}`;
+    $('me-sub').textContent = isGuest
+      ? 'Invited to one chat'
+      : APP
+        ? `AirChat app${APP_VERSION ? ` ${APP_VERSION}` : ''}`
+        : `AirChat · port ${state.server.port}`;
   }
 
   function previewText(conversation) {
@@ -1355,6 +1373,23 @@
   function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
 
+    // In the app there is nothing to install and nothing to cache: the interface
+    // is on the same machine as the server, and a service worker sitting under an
+    // app that is being replaced would keep serving the old interface. If an
+    // earlier version registered one, take it back out.
+    if (APP) {
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+        .catch((err) => {
+          // Not fatal: the interface still works, it just may be served from a
+          // cache until the app is updated. Worth saying out loud, not worth
+          // interrupting anyone over.
+          console.warn('AirChat: could not remove a service worker:', err.message);
+        });
+      return;
+    }
+
     // Service workers need a secure context: localhost, or an https:// tunnel.
     if (!window.isSecureContext) {
       console.info('AirChat: home-screen install and notifications need https (or localhost).');
@@ -1453,7 +1488,7 @@
   }
 
   function maybeOfferInstall() {
-    if (isInstalled()) return;
+    if (APP || isInstalled()) return;
 
     try {
       if (window.localStorage.getItem(INSTALL_DISMISSED_KEY)) return;
@@ -1467,6 +1502,7 @@
   // Chrome and Edge fire this once, and only while AirChat is installable. Keep
   // it so our own button can ask for the real install prompt.
   window.addEventListener('beforeinstallprompt', (event) => {
+    if (APP) return;
     event.preventDefault();
     installPrompt = event;
     if (!$('install-card').classList.contains('hidden')) showInstallCard();
@@ -2332,7 +2368,8 @@
       );
 
       // ---- Install ----
-      if (!isInstalled()) {
+      // Nothing to install into: this is the app.
+      if (!APP && !isInstalled()) {
         modal.appendChild(el('div', 'section-label', 'Get AirChat as an app'));
 
         const installButton = el('button', 'btn btn-quiet', 'How to add it to this device');
@@ -2511,6 +2548,8 @@
    * server, so it survives the trip and the chat stays locked.
    */
   function upliftToSecureAddress(next) {
+    // The app is not a browser on a LAN address; nothing here applies to it.
+    if (APP) return false;
     if (window.isSecureContext) return false;
 
     const server = (next && next.server) || {};

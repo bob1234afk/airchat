@@ -9,6 +9,7 @@
     "start": "node server/index.js",
     "app": "electron .",
     "doctor": "node tools/doctor.js",
+    "check:app": "node tools/check-app.js",
     "icon": "node tools/make-icon.js",
     "build:mac": "node packaging/mac/build-mac.js",
     "build:ipa": "node packaging/ios/build-ipa.js",

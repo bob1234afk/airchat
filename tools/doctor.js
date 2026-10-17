@@ -20,6 +20,7 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const net = require('net');
@@ -249,6 +250,132 @@ function checkElementIds() {
   }
 }
 
+/**
+ * Prove the public link really works, without needing cloudflared installed.
+ *
+ * The public address is what makes an invite openable from another house, and it
+ * is also the thing most likely to be quietly wrong: an address saved after its
+ * tunnel died is a friend staring at DNS. Running the real module against a
+ * stand-in cloudflared checks the parts that would rot silently - reading the
+ * address out of the output, stamping config.json, refreshing that stamp, and
+ * clearing it on the way out - and leaves the machine as it found it.
+ */
+async function checkPublicLink() {
+  heading('Public link');
+
+  const modulePath = path.join(ROOT, 'server', 'tunnel.js');
+  if (!fs.existsSync(modulePath)) {
+    fail('server/tunnel.js is missing - the app and the tunnel launcher both need it');
+    return;
+  }
+
+  let Tunnel;
+  try {
+    ({ Tunnel } = require(modulePath));
+  } catch (err) {
+    fail('server/tunnel.js failed to load', err.message);
+    return;
+  }
+
+  if (typeof Tunnel !== 'function') {
+    fail('server/tunnel.js does not export Tunnel');
+    return;
+  }
+
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'airchat-tunnel-'));
+  const configPath = path.join(work, 'config.json');
+  const stubPath = path.join(work, 'stub-cloudflared.js');
+
+  try {
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ token: 'keep-me', port: 4000 }, null, 2)}\n`,
+      'utf8'
+    );
+
+    // What a real cloudflared prints, including the banner, so the address has to
+    // be found inside noise rather than at the start of a line.
+    fs.writeFileSync(
+      stubPath,
+      [
+        "console.log('2026-10-17 INF Requesting new quick Tunnel on trycloudflare.com...');",
+        'setTimeout(() => console.log(' +
+          "'2026-10-17 INF |  https://doctor-check.trycloudflare.com  |'), 120);",
+        'setInterval(() => {}, 1000);',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const tunnel = new Tunnel({
+      binary: process.execPath,
+      args: [stubPath],
+      configPath,
+      heartbeatMs: 200,
+    });
+
+    const result = await tunnel.start();
+
+    if (!result.ok || !/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(result.url || '')) {
+      fail('the tunnel address was not recognised', result.detail || `got: ${JSON.stringify(result)}`);
+      return;
+    }
+    pass(`the address is read out of cloudflared's output: ${result.url}`);
+
+    const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (saved.publicUrl !== result.url) {
+      fail('the address was not saved to config.json', `publicUrl is ${JSON.stringify(saved.publicUrl)}`);
+      return;
+    }
+    pass('it is saved to config.json, so invite links can use it');
+
+    if (saved.token !== 'keep-me') {
+      fail('saving the address overwrote other settings in config.json');
+      return;
+    }
+    pass('nothing else in config.json is disturbed');
+
+    const stale = () => Date.now() - Number(saved.publicUrlAt) > PUBLIC_URL_MAX_AGE_MS;
+    if (!(Number(saved.publicUrlAt) > 0) || stale()) {
+      fail('the address was saved without a usable proof-of-life stamp');
+      return;
+    }
+    pass('it carries the time it was last known good');
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const refreshed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (!(Number(refreshed.publicUrlAt) > Number(saved.publicUrlAt))) {
+      fail('the stamp is not refreshed while the tunnel runs, so the link would look dead');
+      return;
+    }
+    pass('the stamp is refreshed while the tunnel is up');
+
+    tunnel.stop();
+    const cleared = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (cleared.publicUrl !== '' || Number(cleared.publicUrlAt) !== 0) {
+      fail('stopping the tunnel left the address in config.json', JSON.stringify(cleared.publicUrl));
+      return;
+    }
+    pass('stopping the tunnel withdraws the address, so no dead link can be handed out');
+
+    // No cloudflared at all is a normal state, not a crash.
+    const missing = await new Tunnel({ binary: 'airchat-no-such-binary', configPath }).start();
+    if (missing.ok || !/not installed/i.test(missing.detail || '')) {
+      fail('a missing cloudflared is not reported as "not installed"', JSON.stringify(missing));
+      return;
+    }
+    pass('a missing cloudflared is reported in words, not thrown');
+  } catch (err) {
+    fail('the public-link check crashed', err.message);
+  } finally {
+    try {
+      fs.rmSync(work, { recursive: true, force: true });
+    } catch (err) {
+      // A leftover temp folder is not worth failing the doctor over.
+    }
+  }
+}
+
 async function main() {
   console.log('AirChat doctor');
 
@@ -313,6 +440,7 @@ async function main() {
       'parseTwilioWebhook',
     ],
     'server/router.js': ['Router'],
+    'server/tunnel.js': ['Tunnel', 'findCloudflared', 'writePublicUrl'],
   };
 
   for (const [relative, names] of Object.entries(EXPECTED)) {
@@ -373,6 +501,7 @@ async function main() {
   }
 
   await checkIcons();
+  await checkPublicLink();
 
   /* ---- 5. end-to-end encryption -------------------------------------- */
 
@@ -427,13 +556,20 @@ async function main() {
   heading('Configuration');
 
   let port = 4000;
-  const configPath = path.join(ROOT, 'config.json');
 
-  if (fs.existsSync(configPath)) {
+  // The desktop app keeps its files in its own folder, so that is the one that
+  // describes how the app will actually start; a config.json next to the code is
+  // what a folder-download copy used, and is still read if the app has none yet.
+  const appHome = process.env.APPDATA ? path.join(process.env.APPDATA, 'AirChat', 'home') : '';
+  const configPath = [appHome && path.join(appHome, 'config.json'), path.join(ROOT, 'config.json')].find(
+    (candidate) => candidate && fs.existsSync(candidate)
+  );
+
+  if (configPath) {
     try {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       if (parsed && Number(parsed.port)) port = Number(parsed.port);
-      pass('config.json parses');
+      pass(`config.json parses (${configPath.replace(ROOT, '.')})`);
 
       // A public link that outlived its tunnel is worse than no link at all: it
       // looks real here and fails in the friend's browser.
@@ -443,8 +579,8 @@ async function main() {
       if (savedUrl && Number.isFinite(stamp) && stamp > 0) {
         if (Date.now() - stamp > PUBLIC_URL_MAX_AGE_MS) {
           warn(
-            'config.json still holds a public link from an earlier run, which no longer exists - ' +
-              'start AirChat with "Start AirChat + Public Link.bat" for a fresh one'
+            'config.json holds a public link from an earlier run, which no longer exists - ' +
+              'the app opens a fresh one each time it starts, so this clears itself'
           );
         } else {
           pass('the public link in config.json is still fresh');
@@ -475,7 +611,7 @@ async function main() {
 
   if (failures === 0) {
     const suffix = warnings ? ` (${warnings} warning${warnings === 1 ? '' : 's'})` : '';
-    console.log(`  AirChat looks good${suffix}. Start it with:  npm start`);
+    console.log(`  AirChat looks good${suffix}. Start the app with:  npm run app`);
   } else {
     console.log(`  ${failures} problem${failures === 1 ? '' : 's'} found. Fix the \u2717 items above.`);
   }
