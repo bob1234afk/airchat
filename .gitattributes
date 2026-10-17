@@ -1,0 +1,18 @@
+* text=auto eol=lf
+
+# macOS launchers are bash scripts: a CR on any line makes them fail to run.
+*.command text eol=lf
+*.sh      text eol=lf
+
+# Windows launchers and PowerShell get the endings their platforms expect.
+*.bat     text eol=crlf
+*.ps1     text eol=crlf
+*.cmd     text eol=crlf
+
+*.png     binary
+*.ico     binary
+*.ipa     binary
+*.zip     binary
+*.exe     binary
+*.dmg     binary
+*.app     binary
